@@ -241,6 +241,7 @@ DECLARE @sysindexes TABLE (
     has_filter	     	 bit NULL,
     is_system_named      bit NOT NULL,
     [bucket_count]       bigint NULL,
+    [compression_delay]  int NULL,
     PRIMARY KEY CLUSTERED ([object_id], index_id)
 );
 
@@ -524,12 +525,14 @@ LEFT JOIN '+@database+'.sys.table_types AS tt ON t.user_type_id=tt.user_type_id
 LEFT JOIN '+@database+'.sys.schemas AS s ON t.is_table_type=1 AND t.[schema_id]=s.[schema_id]
 WHERE p.[object_id]='+@object_id_str);
 
+SET @temp=(CASE WHEN SERVERPROPERTY('ProductVersion')>='13' THEN 'ix.[compression_delay]' ELSE 'NULL' END);
+
 INSERT INTO @sysindexes
 EXEC('
 SELECT ix.[object_id], ix.index_id, ix.[name], ix.[type], ix.[type_desc], ix.data_space_id,
        ix.is_primary_key, ix.is_unique_constraint, ix.is_unique, ix.filter_definition,
        ix.fill_factor, ix.[allow_row_locks], ix.[allow_page_locks], ix.is_padded, ix.has_filter,
-	   ISNULL(kc.is_system_named, 0), NULL
+	   ISNULL(kc.is_system_named, 0), NULL, '+@temp+'
 FROM '+@database+'.sys.indexes AS ix
 LEFT JOIN '+@database+'.sys.key_constraints AS kc ON ix.[object_id]=kc.parent_object_id AND ix.[name]=kc.[name]
 WHERE ix.is_hypothetical=0 AND ix.[type_desc] NOT LIKE ''%HASH%''');
@@ -540,7 +543,7 @@ IF (@compatibility_level>=120)
     SELECT ix.[object_id], ix.index_id, ix.[name], ix.[type], ix.[type_desc], ix.data_space_id,
            ix.is_primary_key, ix.is_unique_constraint, ix.is_unique, ix.filter_definition,
            ix.fill_factor, ix.[allow_row_locks], ix.[allow_page_locks], ix.is_padded, ix.has_filter,
-	       ISNULL(kc.is_system_named, 0), ix.[bucket_count]
+	       ISNULL(kc.is_system_named, 0), ix.[bucket_count], NULL
     FROM '+@database+'.sys.hash_indexes AS ix
     LEFT JOIN '+@database+'.sys.key_constraints AS kc ON ix.[object_id]=kc.parent_object_id AND ix.[name]=kc.[name]
     WHERE ix.is_hypothetical=0');
@@ -976,6 +979,7 @@ IF (@has_indexes=1)
            ISNULL(' WHERE '+ix.filter_definition COLLATE database_default, '') AS [Filter],
 	   ISNULL('WITH ('+NULLIF(SUBSTRING(
 	              ISNULL(', DATA_COMPRESSION='+NULLIF(NULLIF(p.data_compression_desc, 'NONE'), 'COLUMNSTORE'), '')+
+                  ISNULL(', COMPRESSION_DELAY='+CAST(ix.[compression_delay] AS varchar(10))+' MINUTES', '')+
             (CASE WHEN ix.[type] IN (1, 2)
 	              THEN (CASE WHEN ix.fill_factor!=@default_fill_factor THEN ', FILLFACTOR='+ISNULL(NULLIF(CAST(ix.fill_factor AS varchar(max)), '0'), '100') ELSE '' END)+
 	                   ', ALLOW_ROW_LOCKS='+(CASE ix.[allow_row_locks] WHEN 1 THEN 'ON' ELSE 'OFF' END)+
