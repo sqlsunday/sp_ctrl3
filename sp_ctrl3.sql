@@ -604,13 +604,22 @@ FROM @syssqlmodules;
 BEGIN TRY;
 	INSERT INTO @sysexprdependencies
 	EXEC('
-	SELECT DISTINCT d.referencing_id,
-					ISNULL(ct.type_table_object_id, d.referenced_id),
-					(CASE WHEN ct.user_type_id IS NOT NULL THEN 1 ELSE d.is_schema_bound_reference END)
-	FROM '+@database+'.sys.sql_expression_dependencies AS d
-	LEFT JOIN '+@database+'.sys.table_types AS ct ON d.referenced_class=6  AND d.referenced_id=ct.user_type_id
-	WHERE d.referencing_class=1 AND
-		  d.referenced_class IN (1, 6) AND referenced_id IS NOT NULL');
+    SELECT referencing_id,
+           referenced_id,
+           is_schema_bound_reference
+    FROM (
+	    SELECT DISTINCT d.referencing_id,
+					    COALESCE(ct.type_table_object_id,
+                                 d.referenced_id,
+                                 (CASE WHEN d.referenced_server_name IS NULL AND d.referenced_database_name IS NULL
+                                       THEN OBJECT_ID(ISNULL(QUOTENAME(referenced_schema_name)+N''.'', N'''')+QUOTENAME(d.referenced_entity_name)) END)) AS referenced_id,
+					    (CASE WHEN ct.user_type_id IS NOT NULL THEN 1 ELSE d.is_schema_bound_reference END) AS is_schema_bound_reference
+	    FROM '+@database+'.sys.sql_expression_dependencies AS d
+	    LEFT JOIN '+@database+'.sys.table_types AS ct ON d.referenced_class=6  AND d.referenced_id=ct.user_type_id
+	    WHERE d.referencing_class=1 AND
+		      d.referenced_class IN (1, 6)
+        ) AS sub
+    WHERE referenced_id IS NOT NULL;');
 END TRY
 BEGIN CATCH;
 	PRINT 'Problem compiling expression dependencies: '+ERROR_MESSAGE();
