@@ -17,6 +17,8 @@ code in any way.
 
     EXECUTE sp_ctrl3 {object name}
 
+How to install and use it: https://sqlsunday.com/2016/11/28/sp_ctrl3/
+
 **SHORTCUT:**   In SQL Server Management Studio, go to Tools -> Options
 -> Environment -> Keyboard -> Query Shortcuts.
 
