@@ -12,7 +12,7 @@ GO
 Copyright Daniel Hutmacher under Creative Commons 4.0 license with attribution.
 http://creativecommons.org/licenses/by/4.0/
 
-Source: http://sqlsunday.com/downloads/
+Source: https://github.com/sqlsunday/sp_ctrl3
 
 DISCLAIMER: This script may not be suitable to run in a production
             environment. I cannot assume any responsibility regarding
@@ -36,7 +36,7 @@ SHORTCUT:   In SQL Server Management Studio, go to Tools -> Options
             schema (with a dot) need to be enclosed in quotes for this
             to work in older versions of SSMS.
 
-VERSION:    2018-10-24
+VERSION:    2020-10-29
 
 */
 
@@ -107,15 +107,15 @@ SET @object_id_str=CAST(@object_id AS varchar(20));
 IF (@object_id IS NULL) BEGIN;
 
     WITH rcte AS (
-        SELECT [object_id], 0 AS line, CAST(NULL AS nvarchar(max)) AS [sql], REPLACE([definition], CHAR(13)+CHAR(10), CHAR(13)) AS remain
+        SELECT [object_id], 0 AS line, CAST(NULL AS nvarchar(max)) AS [sql], REPLACE([definition], NCHAR(13)+NCHAR(10), NCHAR(13)) AS remain
         FROM sys.sql_modules
         WHERE [definition] LIKE N'%'+@objname+'%'
 
         UNION ALL
 
         SELECT [object_id], line+1,
-               CAST(LEFT(remain, PATINDEX(N'%['+CHAR(10)+CHAR(13)+']%', remain)-1) AS nvarchar(max)),
-               CAST(SUBSTRING(remain, PATINDEX(N'%['+CHAR(10)+CHAR(13)+']%', remain)+1, LEN(remain)) AS nvarchar(max))
+               CAST(LEFT(remain, PATINDEX(N'%['+NCHAR(10)+NCHAR(13)+']%', remain+NCHAR(13))-1) AS nvarchar(max)),
+               CAST(SUBSTRING(remain, PATINDEX(N'%['+NCHAR(10)+NCHAR(13)+']%', remain+NCHAR(13))+1, LEN(remain)) AS nvarchar(max))
         FROM rcte
         WHERE remain LIKE N'%'+@objname+'%')
 
@@ -1553,28 +1553,28 @@ BEGIN TRANSACTION;
 
     -- DISCLAIMER:
     SET @src=SUBSTRING(@src, CHARINDEX(N'DISCLAIMER: ', @src)+12, LEN(@src));
-    SELECT @val=LTRIM(RTRIM(REPLACE(LEFT(@src, CHARINDEX(CHAR(13)+CHAR(10)+CHAR(13)+CHAR(10), @src)-1), CHAR(13)+CHAR(10), N' ')));
+    SELECT @val=LTRIM(RTRIM(REPLACE(LEFT(@src, CHARINDEX(NCHAR(13)+NCHAR(10)+NCHAR(13)+NCHAR(10), @src)-1), NCHAR(13)+NCHAR(10), N' ')));
     WHILE (@val LIKE N'%  %') SET @val=REPLACE(@val, N'  ', N' ');
 
     EXECUTE sys.sp_addextendedproperty @name='Disclaimer', @value=@val, @level0type='SCHEMA', @level0name='dbo', @level1type='PROCEDURE', @level1name='sp_ctrl3';
 
     -- USAGE:
     SET @src=SUBSTRING(@src, CHARINDEX(N'USAGE: ', @src)+12, LEN(@src));
-    SELECT @val=LTRIM(RTRIM(REPLACE(LEFT(@src, CHARINDEX(CHAR(13)+CHAR(10)+CHAR(13)+CHAR(10), @src)-1), CHAR(13)+CHAR(10), N' ')));
+    SELECT @val=LTRIM(RTRIM(REPLACE(LEFT(@src, CHARINDEX(NCHAR(13)+NCHAR(10)+NCHAR(13)+NCHAR(10), @src)-1), NCHAR(13)+NCHAR(10), N' ')));
     WHILE (@val LIKE N'%  %') SET @val=REPLACE(@val, N'  ', N' ');
 
     EXECUTE sys.sp_addextendedproperty @name='Usage', @value=@val, @level0type='SCHEMA', @level0name='dbo', @level1type='PROCEDURE', @level1name='sp_ctrl3';
 
     -- SHORTCUT:
     SET @src=SUBSTRING(@src, CHARINDEX(N'SHORTCUT: ', @src)+12, LEN(@src));
-    SELECT @val=LTRIM(RTRIM(REPLACE(LEFT(@src, CHARINDEX(CHAR(13)+CHAR(10)+CHAR(13)+CHAR(10), @src)-1), CHAR(13)+CHAR(10), N' ')));
+    SELECT @val=LTRIM(RTRIM(REPLACE(LEFT(@src, CHARINDEX(NCHAR(13)+NCHAR(10)+NCHAR(13)+NCHAR(10), @src)-1), NCHAR(13)+NCHAR(10), N' ')));
     WHILE (@val LIKE N'%  %') SET @val=REPLACE(@val, N'  ', N' ');
 
     EXECUTE sys.sp_addextendedproperty @name='Shortcut', @value=@val, @level0type='SCHEMA', @level0name='dbo', @level1type='PROCEDURE', @level1name='sp_ctrl3';
 
     -- VERSION:
     SET @src=SUBSTRING(@src, CHARINDEX(N'VERSION: ', @src)+12, LEN(@src));
-    SELECT @val=LTRIM(RTRIM(REPLACE(LEFT(@src, CHARINDEX(CHAR(13)+CHAR(10)+CHAR(13)+CHAR(10), @src)-1), CHAR(13)+CHAR(10), N' ')));
+    SELECT @val=LTRIM(RTRIM(REPLACE(LEFT(@src, CHARINDEX(NCHAR(13)+NCHAR(10)+NCHAR(13)+NCHAR(10), @src)-1), NCHAR(13)+NCHAR(10), N' ')));
     WHILE (@val LIKE N'%  %') SET @val=REPLACE(@val, N'  ', N' ');
 
     EXECUTE sys.sp_addextendedproperty @name='Version', @value=@val, @level0type='SCHEMA', @level0name='dbo', @level1type='PROCEDURE', @level1name='sp_ctrl3';
