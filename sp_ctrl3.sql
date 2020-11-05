@@ -807,7 +807,7 @@ SELECT (CASE WHEN @is_tempdb=1 THEN '' ELSE sch.[name] END) AS [Schema],
 			WHEN obj.is_memory_optimized=1 THEN ' (memory optimized, '+REPLACE(LOWER(obj.durability_desc), '_', ' ')+')'
 			ELSE '' END), '') AS [Type],
        obj.[object_id],
-       +(CASE WHEN obj.principal_id IS NULL THEN '('+own.[name]+')' ELSE own.[name] END) AS [Owner],
+       own.[name]+(CASE WHEN obj.principal_id IS NULL THEN N' (schema owner)' ELSE N'' END) AS [Owner],
        (CASE WHEN ix.index_id IS NOT NULL THEN 'ON '+QUOTENAME(ds.[name])+ISNULL('('+c.[name]+')', '') ELSE '' END) AS [Data space],
        ISNULL('WITH ('+NULLIF(SUBSTRING(
                 (CASE WHEN obj.history_table_id IS NOT NULL
