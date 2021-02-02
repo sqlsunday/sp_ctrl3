@@ -160,6 +160,7 @@ DECLARE @sysobjects TABLE (
     [object_id]	        int NOT NULL,
     principal_id        int NULL,
     [type]		        char(2) COLLATE database_default NOT NULL,
+    [type_desc]         nvarchar(60) COLLATE database_default NOT NULL,
     [name]              sysname COLLATE database_default NOT NULL,
 	is_memory_optimized bit NOT NULL,
 	durability_desc     nvarchar(60) COLLATE database_default NULL,
@@ -352,6 +353,13 @@ DECLARE @sysdatabasepermissions TABLE (
     PRIMARY KEY CLUSTERED (class, major_id, minor_id, [type], [state], grantee_principal_id)
 );
 
+DECLARE @signatures TABLE (
+    [name]              sysname COLLATE database_default NOT NULL,
+    encryption_type_desc varchar(20) COLLATE database_default NULL,
+    [type_desc]         nvarchar(60) COLLATE database_default NOT NULL,
+    major_id            int NOT NULL
+);
+
 DECLARE @references TABLE (
     parent_id      int NOT NULL,         --- object_id of referencing object
     parent_name    varchar(255) COLLATE database_default NOT NULL, -- Name of referencing object
@@ -437,7 +445,7 @@ IF (@is_azure_sql_db=0)
 		WHERE [type]=''O9T''');
 
 SET @temp='
-SELECT ISNULL(tt.[schema_id], o.[schema_id]), o.[object_id], o.principal_id, o.[type], ISNULL(tt.[name], o.[name]),
+SELECT ISNULL(tt.[schema_id], o.[schema_id]), o.[object_id], o.principal_id, o.[type], o.[type_desc], ISNULL(tt.[name], o.[name]),
        '+(CASE WHEN @compatibility_level>=120 THEN 'ISNULL(t.is_memory_optimized, 0), t.durability_desc' ELSE '0, NULL' END)+',
        '+(CASE WHEN @compatibility_level>=130 THEN 't.temporal_type_desc, t.history_table_id' ELSE 'NULL, NULL' END)+',
        (CASE WHEN ct.[object_id] IS NOT NULL THEN 1 ELSE 0 END), ISNULL(ct.is_track_columns_updated_on, 0), ct.min_valid_version
@@ -661,6 +669,23 @@ SELECT class, class_desc, major_id, minor_id, grantee_principal_id,
        grantor_principal_id, [type], [permission_name], [state], state_desc
 FROM '+@database+'.sys.database_permissions');
 
+INSERT INTO @signatures
+EXEC('
+SELECT ask.[name], (CASE ask.pvt_key_encryption_type WHEN ''PW'' THEN ''PASSWORD=''''*****'''''' END) AS encryption_type_desc, sg.[type] AS [type_desc], sg.[entity_id] AS major_id
+FROM '+@database+'.sys.asymmetric_keys AS ask
+CROSS APPLY '+@database+'.sys.fn_check_object_signatures (''asymmetric key'', ask.thumbprint) AS sg
+INNER JOIN '+@database+'.sys.objects AS o ON sg.[entity_id]=o.[object_id] AND sg.[type]=o.[type_desc]
+WHERE sg.is_signed=1
+  AND o.[object_id]='+@object_id_str+';
+
+SELECT crt.[name], (CASE crt.pvt_key_encryption_type WHEN ''PW'' THEN ''PASSWORD=''''*****'''''' END) AS encryption_type_desc, sg.[type] AS [type_desc], sg.[entity_id] AS major_id
+FROM '+@database+'.sys.certificates AS crt
+CROSS APPLY '+@database+'.sys.fn_check_object_signatures (''certificate'', crt.thumbprint) AS sg
+INNER JOIN '+@database+'.sys.objects AS o ON sg.[entity_id]=o.[object_id] AND sg.[type]=o.[type_desc]
+WHERE sg.is_signed=1
+  AND o.[object_id]='+@object_id_str+';
+');
+
 INSERT INTO @systriggers
 EXEC('
 SELECT t.[object_id], t.[name], t.is_disabled, t.is_instead_of_trigger,
@@ -751,6 +776,8 @@ LEFT JOIN @sysforeignkeys AS fk ON @object_id IN (fk.parent_object_id, fk.refere
 LEFT JOIN @sysexprdependencies AS dep ON @object_id IN (dep.referencing_id, dep.referenced_id)
 LEFT JOIN @sysdatabasepermissions AS per ON per.class=1 AND per.major_id=@object_id
 WHERE obj.[object_id]=@object_id;
+
+IF (EXISTS (SELECT NULL FROM @signatures)) SET @has_permissions=1;
 
 
 
@@ -1372,9 +1399,16 @@ IF (@has_permissions=1)
 			   rcte.grantor_principal_id=p.grantor_principal_id
 		     ORDER BY rcte.ordinal DESC) AS px
 	WHERE p.ordinal=1
-	ORDER BY (CASE p.class WHEN 1 THEN 1 WHEN 3 THEN 2 ELSE 3 END), p.securable, grantee.[name],
-	         (CASE p.[state] WHEN 'G' THEN 1 WHEN 'W' THEN 2 WHEN 'D' THEN 3 END), grantor.[name];
 
+    UNION ALL
+
+    SELECT 'ADD SIGNATURE' AS [Grant/Deny], '' AS [Permission],
+           N'TO '+sch.[name]+N'.'+obj.[name] AS [Object],
+           '' AS [Principal],
+           N'BY '+sig.[name]+ISNULL(N' WITH '+sig.encryption_type_desc, N'')+';' AS [Options]
+    FROM @signatures AS sig
+    INNER JOIN @sysobjects AS obj ON sig.major_id=obj.[object_id] AND sig.[type_desc]=obj.[type_desc]
+	INNER JOIN @sysschemas AS sch ON obj.[schema_id]=sch.[schema_id];
 
 
 
