@@ -36,7 +36,7 @@ SHORTCUT:   In SQL Server Management Studio, go to Tools -> Options
             schema (with a dot) need to be enclosed in quotes for this
             to work in older versions of SSMS.
 
-VERSION:    2021-02-02
+VERSION:    2021-06-09
 
 */
 
@@ -315,6 +315,8 @@ DECLARE @syspartitions TABLE (
     partition_number int NOT NULL,
     [rows]           bigint NULL,
     data_compression_desc nvarchar(120) COLLATE database_default NOT NULL,
+    boundary_value_on_right bit NULL,
+    boundary         nvarchar(max) NULL,
     PRIMARY KEY CLUSTERED ([object_id], index_id, partition_number)
 );
 
@@ -635,8 +637,21 @@ END CATCH;
 
 INSERT INTO @syspartitions
 EXEC('
-SELECT [partition_id], [object_id], index_id, partition_number, [rows], data_compression_desc
-FROM '+@database+'.sys.partitions');
+SELECT p.[partition_id], p.[object_id], p.index_id, p.partition_number, p.[rows], p.data_compression_desc, pf.boundary_value_on_right, prv.boundary
+FROM '+@database+'.sys.partitions AS p
+LEFT JOIN '+@database+'.sys.indexes AS i ON p.[object_id]=i.[object_id] AND p.index_id=i.index_id AND p.[object_id]='+@object_id_str+'
+LEFT JOIN '+@database+'.sys.partition_schemes AS ps ON i.data_space_id=ps.data_space_id
+LEFT JOIN '+@database+'.sys.partition_functions AS pf ON ps.function_id=pf.function_id
+LEFT JOIN (
+    SELECT function_id, boundary_id,
+           
+           (CASE SQL_VARIANT_PROPERTY([value], ''BaseType'')
+            WHEN ''date'' THEN LEFT(CONVERT(nvarchar(max), [value], 120), 10)
+            WHEN ''datetime'' THEN CONVERT(nvarchar(max), [value], 120)
+            ELSE CAST([value] AS nvarchar(max)) END) AS boundary
+    FROM '+@database+'.sys.partition_range_values
+    WHERE parameter_id=1
+    ) AS prv ON pf.function_id=prv.function_id AND p.partition_number=prv.boundary_id');
 
 BEGIN TRY;
 	INSERT INTO @syspartitionstats
@@ -689,7 +704,7 @@ WHERE sg.is_signed=1
 INSERT INTO @systriggers
 EXEC('
 SELECT t.[object_id], t.[name], t.is_disabled, t.is_instead_of_trigger,
-       SUBSTRING(CAST((SELECT '', ''+te.[type_desc] FROM sys.trigger_events AS te
+       SUBSTRING(CAST((SELECT '', ''+te.[type_desc] FROM '+@database+'.sys.trigger_events AS te
                        WHERE te.[object_id]=t.[object_id]
                        ORDER BY te.[type] FOR XML PATH(''''), TYPE) AS sysname), 3, 256)
 FROM '+@database+'.sys.triggers AS t
@@ -789,8 +804,8 @@ IF (@type='SP') BEGIN;
 		INSERT INTO @definition (id, [definition])
 		EXEC(N'
 			SELECT 1, ''CREATE SECURITY POLICY [''+s.[name] COLLATE database_default+''].[''+p.[name] COLLATE database_default+'']''
-			FROM sys.schemas AS s
-			INNER JOIN sys.security_policies AS p ON s.[schema_id]=p.[schema_id]
+			FROM '+@database+'.sys.schemas AS s
+			INNER JOIN '+@database+'.sys.security_policies AS p ON s.[schema_id]=p.[schema_id]
 			WHERE p.[object_id]='+@object_id_str+N'
 
 			UNION ALL
@@ -801,10 +816,10 @@ IF (@type='SP') BEGIN;
 							THEN '',''
 							ELSE '' WITH (STATE=''+(CASE WHEN p.is_enabled=1 THEN ''ON'' ELSE ''OFF'' END)+
 												(CASE WHEN p.is_schema_bound=1 THEN '', SCHEMABINDING=ON'' ELSE '''' END)+'')'' END) AS [Definition]
-			FROM sys.security_policies AS p
-			INNER JOIN sys.security_predicates AS sp ON p.[object_id]=sp.[object_id]
-			INNER JOIN sys.objects AS o ON sp.target_object_id=o.[object_id]
-			INNER JOIN sys.schemas AS os ON o.[schema_id]=os.[schema_id]
+			FROM '+@database+'.sys.security_policies AS p
+			INNER JOIN '+@database+'.sys.security_predicates AS sp ON p.[object_id]=sp.[object_id]
+			INNER JOIN '+@database+'.sys.objects AS o ON sp.target_object_id=o.[object_id]
+			INNER JOIN '+@database+'.sys.schemas AS os ON o.[schema_id]=os.[schema_id]
 			WHERE p.[object_id]='+@object_id_str+N';');
 
 		SET @module_definition=N'';
@@ -1421,6 +1436,17 @@ IF (@has_data=1 AND @rowcount>0)
 		     WHEN 1 THEN ''
 		     ELSE CAST(p.partition_number AS varchar(10))
 		     END) AS [Partition],
+
+           ISNULL(LAG(p.boundary, 1) OVER (PARTITION BY ix.index_id ORDER BY p.partition_number), N'')+
+           (CASE WHEN p.boundary_value_on_right=1 AND p.partition_number=1 THEN pc.[name]
+                 WHEN p.boundary_value_on_right=1 THEN N' < '+pc.[name]
+                 WHEN p.boundary_value_on_right=0 AND p.partition_number=1 THEN pc.[name]
+                 WHEN p.boundary_value_on_right=0 THEN N' <= '+pc.[name]
+                 ELSE N'' END)+
+           LEAD((CASE WHEN p.boundary_value_on_right=1 THEN N' <= '
+                      WHEN p.boundary_value_on_right=0 THEN N' < '
+                      ELSE N'' END), 1, N'') OVER (PARTITION BY ix.index_id ORDER BY p.partition_number)+
+           ISNULL(p.boundary, N'') AS [Boundary],
 
 	       --- Storage properties:
 	       ISNULL(NULLIF(NULLIF(p.data_compression_desc, 'NONE'), 'COLUMNSTORE'), '') AS [Compression],
