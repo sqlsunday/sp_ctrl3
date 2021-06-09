@@ -646,8 +646,8 @@ LEFT JOIN (
     SELECT function_id, boundary_id,
            
            (CASE 
-            WHEN SQL_VARIANT_PROPERTY([value], ''BaseType'')=''date'' THEN LEFT(CONVERT(nvarchar(max), [value], 120), 10)
-            WHEN SQL_VARIANT_PROPERTY([value], ''BaseType'') LIKE ''%datetime%'' THEN CONVERT(nvarchar(max), [value], 120)
+            WHEN CAST(SQL_VARIANT_PROPERTY([value], ''BaseType'') AS sysname)=N''date'' THEN LEFT(CONVERT(nvarchar(max), [value], 120), 10)
+            WHEN CAST(SQL_VARIANT_PROPERTY([value], ''BaseType'') AS sysname) LIKE N''%datetime%'' THEN CONVERT(nvarchar(max), [value], 120)
             ELSE CAST([value] AS nvarchar(max)) END) AS boundary
     FROM '+@database+'.sys.partition_range_values
     WHERE parameter_id=1
