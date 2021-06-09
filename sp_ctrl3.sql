@@ -1439,12 +1439,12 @@ IF (@has_data=1 AND @rowcount>0)
 
            ISNULL(LAG(p.boundary, 1) OVER (PARTITION BY ix.index_id ORDER BY p.partition_number), N'')+
            (CASE WHEN p.boundary_value_on_right=1 AND p.partition_number=1 THEN pc.[name]
-                 WHEN p.boundary_value_on_right=1 THEN N' < '+pc.[name]
+                 WHEN p.boundary_value_on_right=1 THEN N' <= '+pc.[name]
                  WHEN p.boundary_value_on_right=0 AND p.partition_number=1 THEN pc.[name]
-                 WHEN p.boundary_value_on_right=0 THEN N' <= '+pc.[name]
+                 WHEN p.boundary_value_on_right=0 THEN N' < '+pc.[name]
                  ELSE N'' END)+
-           LEAD((CASE WHEN p.boundary_value_on_right=1 THEN N' <= '
-                      WHEN p.boundary_value_on_right=0 THEN N' < '
+           LEAD((CASE WHEN p.boundary_value_on_right=1 THEN N' < '
+                      WHEN p.boundary_value_on_right=0 THEN N' <= '
                       ELSE N'' END), 1, N'') OVER (PARTITION BY ix.index_id ORDER BY p.partition_number)+
            ISNULL(p.boundary, N'') AS [Boundary],
 
