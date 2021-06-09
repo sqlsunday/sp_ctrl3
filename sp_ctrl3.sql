@@ -317,6 +317,8 @@ DECLARE @syspartitions TABLE (
     data_compression_desc nvarchar(120) COLLATE database_default NOT NULL,
     boundary_value_on_right bit NULL,
     boundary         nvarchar(max) NULL,
+    boundary_type    sysname NULL,
+    discrete_boundary bit NULL,
     PRIMARY KEY CLUSTERED ([object_id], index_id, partition_number)
 );
 
@@ -637,14 +639,13 @@ END CATCH;
 
 INSERT INTO @syspartitions
 EXEC('
-SELECT p.[partition_id], p.[object_id], p.index_id, p.partition_number, p.[rows], p.data_compression_desc, pf.boundary_value_on_right, prv.boundary
+SELECT p.[partition_id], p.[object_id], p.index_id, p.partition_number, p.[rows], p.data_compression_desc, pf.boundary_value_on_right, prv.boundary, prv.boundary_type, 0
 FROM '+@database+'.sys.partitions AS p
 LEFT JOIN '+@database+'.sys.indexes AS i ON p.[object_id]=i.[object_id] AND p.index_id=i.index_id AND p.[object_id]='+@object_id_str+'
 LEFT JOIN '+@database+'.sys.partition_schemes AS ps ON i.data_space_id=ps.data_space_id
 LEFT JOIN '+@database+'.sys.partition_functions AS pf ON ps.function_id=pf.function_id
 LEFT JOIN (
-    SELECT function_id, boundary_id,
-           
+    SELECT function_id, boundary_id, CAST(SQL_VARIANT_PROPERTY([value], ''BaseType'') AS sysname) AS boundary_type,
            (CASE 
             WHEN CAST(SQL_VARIANT_PROPERTY([value], ''BaseType'') AS sysname)=N''date'' THEN LEFT(CONVERT(nvarchar(max), [value], 120), 10)
             WHEN CAST(SQL_VARIANT_PROPERTY([value], ''BaseType'') AS sysname) LIKE N''%datetime%'' THEN CONVERT(nvarchar(max), [value], 120)
@@ -652,6 +653,33 @@ LEFT JOIN (
     FROM '+@database+'.sys.partition_range_values
     WHERE parameter_id=1
     ) AS prv ON pf.function_id=prv.function_id AND p.partition_number=prv.boundary_id');
+
+
+-- Does this partition have a discrete boundary, i.e. can it only contain a single boundary value?
+-- This applies to discrete datatypes, like integers, dates, etc.
+UPDATE sub
+SET sub.discrete_boundary=1
+FROM (
+    SELECT discrete_boundary,
+           TRY_CAST(LAG(boundary, 1) OVER (PARTITION BY [object_id], index_id ORDER BY partition_number) AS bigint) AS a,
+           TRY_CAST(boundary AS bigint) AS b,
+           TRY_CAST(LEAD(boundary, 1) OVER (PARTITION BY [object_id], index_id ORDER BY partition_number) AS bigint) AS c
+    FROM @syspartitions
+    WHERE boundary_type IN ('bit', 'tinyint', 'smallint', 'int', 'bigint')
+    ) AS sub
+WHERE a+1=b AND b+1=ISNULL(c, b+1);
+
+UPDATE sub
+SET sub.discrete_boundary=1
+FROM (
+    SELECT discrete_boundary,
+           TRY_CAST(LAG(boundary, 1) OVER (PARTITION BY [object_id], index_id ORDER BY partition_number) AS date) AS a,
+           TRY_CAST(boundary AS date) AS b,
+           TRY_CAST(LEAD(boundary, 1) OVER (PARTITION BY [object_id], index_id ORDER BY partition_number) AS date) AS c
+    FROM @syspartitions
+    WHERE boundary_type IN ('date')
+    ) AS sub
+WHERE DATEADD(day, 1, a)=b AND DATEADD(day, 1, b)=ISNULL(c, DATEADD(day, 1, b));
 
 BEGIN TRY;
 	INSERT INTO @syspartitionstats
@@ -1430,23 +1458,25 @@ IF (@has_permissions=1)
 
 IF (@has_data=1 AND @rowcount>0)
 	SELECT ISNULL(ix.[name], '') AS [Index/heap],
-
+/*
 	       --- Partition number, if there are partitions:
 	       (CASE COUNT(*) OVER (PARTITION BY p.[object_id], p.index_id)
 		     WHEN 1 THEN ''
 		     ELSE CAST(p.partition_number AS varchar(10))
 		     END) AS [Partition],
-
-           ISNULL(LAG(p.boundary, 1) OVER (PARTITION BY ix.index_id ORDER BY p.partition_number), N'')+
-           (CASE WHEN p.boundary_value_on_right=1 AND p.partition_number=1 THEN pc.[name]
-                 WHEN p.boundary_value_on_right=1 THEN N' <= '+pc.[name]
-                 WHEN p.boundary_value_on_right=0 AND p.partition_number=1 THEN pc.[name]
-                 WHEN p.boundary_value_on_right=0 THEN N' < '+pc.[name]
-                 ELSE N'' END)+
-           LEAD((CASE WHEN p.boundary_value_on_right=1 THEN N' < '
-                      WHEN p.boundary_value_on_right=0 THEN N' <= '
-                      ELSE N'' END), 1, N'') OVER (PARTITION BY ix.index_id ORDER BY p.partition_number)+
-           ISNULL(p.boundary, N'') AS [Boundary],
+*/
+           (CASE WHEN p.discrete_boundary=0
+                 THEN ISNULL(LAG(p.boundary, 1) OVER (PARTITION BY ix.index_id ORDER BY p.partition_number), N'')+
+                 (CASE WHEN p.boundary_value_on_right=1 AND p.partition_number=1 THEN pc.[name]
+                       WHEN p.boundary_value_on_right=1 THEN N' <= '+pc.[name]
+                       WHEN p.boundary_value_on_right=0 AND p.partition_number=1 THEN pc.[name]
+                       WHEN p.boundary_value_on_right=0 THEN N' < '+pc.[name]
+                       ELSE N'' END)+
+                 LEAD((CASE WHEN p.boundary_value_on_right=1 THEN N' < '
+                            WHEN p.boundary_value_on_right=0 THEN N' <= '
+                            ELSE N'' END), 1, N'') OVER (PARTITION BY ix.index_id ORDER BY p.partition_number)+
+                 ISNULL(p.boundary, N'')
+                 ELSE pc.[name]+N'='+ISNULL(p.boundary, N'NULL') END) AS [Partition],
 
 	       --- Storage properties:
 	       ISNULL(NULLIF(NULLIF(p.data_compression_desc, 'NONE'), 'COLUMNSTORE'), '') AS [Compression],
