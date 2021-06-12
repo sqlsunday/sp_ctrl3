@@ -1043,7 +1043,34 @@ IF (@has_indexes=1)
 		INNER JOIN ixc ON
 		    rcte.index_id=ixc.index_id AND
 		    rcte.is_included_column=ixc.is_included_column AND
-		    rcte.ordinal+1=ixc.ordinal)
+		    rcte.ordinal+1=ixc.ordinal),
+
+    --- Partition compression
+    part AS (
+        SELECT [object_id], index_id, [group], data_compression_desc,
+               (CASE WHEN partition_count=COUNT(*) THEN 'ALL' ELSE CAST(MIN(partition_number) AS varchar(20))+ISNULL(' TO '+CAST(NULLIF(MAX(partition_number), MIN(partition_number)) AS varchar(20)), '') END) AS partition_list
+        FROM (
+            SELECT [object_id], index_id, partition_number, data_compression_desc, partition_count, SUM(segment) OVER (PARTITION BY [object_id], index_id ORDER BY partition_number ROWS UNBOUNDED PRECEDING) AS [group]
+            FROM (
+                SELECT [object_id], index_id, partition_number, data_compression_desc,
+                       (CASE WHEN LAG(data_compression_desc, 1, '') OVER (PARTITION BY [object_id], index_id ORDER BY partition_number)!=data_compression_desc THEN 1 ELSE 0 END) AS segment,
+                       COUNT(*) OVER () AS partition_count
+                FROM @syspartitions
+                WHERE [object_id]=@object_id
+                ) AS x
+            WHERE partition_count>1
+            ) AS x
+        WHERE data_compression_desc!='NONE'
+        GROUP BY [object_id], index_id, [group], data_compression_desc, partition_count),
+
+    part2 AS (
+        SELECT [object_id], index_id, 'DATA_COMPRESSION='+data_compression_desc+ISNULL(' ON PARTITIONS ('+
+               NULLIF(SUBSTRING(CAST((SELECT ', '+partition_list
+                                      FROM part AS p2
+                                      WHERE p2.[object_id]=p2.[object_id] AND p2.index_id=p1.index_id AND p2.data_compression_desc=p1.data_compression_desc
+                                      ORDER BY [group] FOR XML PATH(''), TYPE) AS varchar(max)), 3, 1000), 'ALL')+')', '') AS [definition]
+        FROM part AS p1
+        GROUP BY [object_id], index_id, data_compression_desc)
 
     SELECT (CASE WHEN ix.is_primary_key=0 AND ix.is_unique_constraint=0 AND ix.is_unique=1 THEN 'UNIQUE ' ELSE '' END)+
            (CASE WHEN ix.is_primary_key=0 AND ix.is_unique_constraint=0 AND ix.[type]=1 THEN 'CLUSTERED ' ELSE '' END)+
@@ -1058,6 +1085,7 @@ IF (@has_indexes=1)
            ISNULL(' WHERE '+ix.filter_definition COLLATE database_default, '') AS [Filter],
 	   ISNULL('WITH ('+NULLIF(SUBSTRING(
 	              ISNULL(', DATA_COMPRESSION='+NULLIF(NULLIF(p.data_compression_desc, 'NONE'), 'COLUMNSTORE'), '')+
+                  ISNULL(CAST((SELECT ', '+[definition] FROM part2 WHERE part2.[object_id]=ix.[object_id] AND part2.index_id=ix.index_id FOR XML PATH(''), TYPE) AS varchar(max)), '')+
                   ISNULL(', COMPRESSION_DELAY='+CAST(ix.[compression_delay] AS varchar(10))+' MINUTES', '')+
             (CASE WHEN ix.[type] IN (1, 2)
 	              THEN (CASE WHEN ix.fill_factor!=@default_fill_factor THEN ', FILLFACTOR='+ISNULL(NULLIF(CAST(ix.fill_factor AS varchar(max)), '0'), '100') ELSE '' END)+
