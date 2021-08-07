@@ -203,6 +203,7 @@ DECLARE @syscolumns TABLE (
     default_is_system_named bit NULL,
     current_value     sql_variant NULL,
     generated_always_type_desc nvarchar(60) COLLATE database_default NULL,
+    is_hidden         bit NULL,
     PRIMARY KEY CLUSTERED ([object_id], column_id)
 );
 
@@ -468,8 +469,8 @@ FROM '+@database+'.sys.schemas');
 
 SET @temp=(CASE
        WHEN @compatibility_level>=130
-       THEN 'c.generated_always_type_desc'
-       ELSE 'NULL' END);
+       THEN 'c.generated_always_type_desc, c.is_hidden'
+       ELSE 'NULL, NULL' END);
 
 INSERT INTO @syscolumns
 EXEC('
@@ -759,7 +760,7 @@ END CATCH;
 
 -- https://docs.microsoft.com/en-us/sql/t-sql/language-elements/reserved-keywords-transact-sql
 INSERT INTO @reserved_keywords (keyword)
-VALUES ('ABSOLUTE'), ('ACTION'), ('ADA'), ('ADD'), ('ADMIN'), ('ADDRESS'), ('AFTER'), ('AGGREGATE'), ('ALIAS'), ('ALL'), ('ALLOCATE'), ('ALTER'), ('AND'), ('ANY'), ('ARE'), ('ARRAY'),
+VALUES ('ABSOLUTE'), ('ACTION'), ('ADA'), ('ADD'), ('ADMIN'), ('ADDRESS'), ('AFTER'), ('AGGREGATE'), ('ALIAS'), ('ALL'), ('ALLOCATE'), ('ALTER'), ('ALWAYS'), ('AND'), ('ANY'), ('ARE'), ('ARRAY'),
        ('AS'), ('ASC'), ('ASENSITIVE'), ('ASSERTION'), ('ASYMMETRIC'), ('AT'), ('ATOMIC'), ('AUTHORIZATION'), ('AVG'), ('BEFORE'), ('BEGIN'), ('BETWEEN'), ('BINARY'),
        ('BIT'), ('BIT_LENGTH'), ('BLOB'), ('BOOLEAN'), ('BOTH'), ('BREADTH'), ('BY'), ('CALL'), ('CALLED'), ('CARDINALITY'), ('CASCADE'), ('CASCADED'), ('CASE'), ('CAST'),
        ('CATALOG'), ('CHAR'), ('CHAR_LENGTH'), ('CHARACTER'), ('CHARACTER_LENGTH'), ('CHECK'), ('CLASS'), ('CLOB'), ('CLOSE'), ('COALESCE'), ('COLLATE'), ('COLLATION'),
@@ -770,8 +771,8 @@ VALUES ('ABSOLUTE'), ('ACTION'), ('ADA'), ('ADD'), ('ADMIN'), ('ADDRESS'), ('AFT
        ('DEFAULT'), ('DEFERRABLE'), ('DEFERRED'), ('DELETE'), ('DEPTH'), ('DEREF'), ('DESC'), ('DESCRIBE'), ('DESCRIPTOR'), ('DESTROY'), ('DESTRUCTOR'), ('DETERMINISTIC'),
        ('DIAGNOSTICS'), ('DICTIONARY'), ('DISCONNECT'), ('DISTINCT'), ('DOMAIN'), ('DOUBLE'), ('DROP'), ('DYNAMIC'), ('EACH'), ('ELEMENT'), ('ELSE'), ('END'), ('END-EXEC'),
        ('EQUALS'), ('ESCAPE'), ('EVERY'), ('EXCEPT'), ('EXCEPTION'), ('EXEC'), ('EXECUTE'), ('EXISTS'), ('EXTERNAL'), ('EXTRACT'), ('FALSE'), ('FETCH'), ('FILTER'), ('FIRST'),
-       ('FLOAT'), ('FOR'), ('FOREIGN'), ('FORTRAN'), ('FOUND'), ('FREE'), ('FROM'), ('FULL'), ('FULLTEXTTABLE'), ('FUSION'), ('GENERAL'), ('GET'), ('GLOBAL'), ('GO'), ('GOTO'),
-       ('GRANT'), ('GROUP'), ('GROUPING'), ('HAVING'), ('HOLD'), ('HOST'), ('HOUR'), ('IDENTITY'), ('IGNORE'), ('IMMEDIATE'), ('IN'), ('INCLUDE'), ('INDEX'), ('INDICATOR'),
+       ('FLOAT'), ('FOR'), ('FOREIGN'), ('FORTRAN'), ('FOUND'), ('FREE'), ('FROM'), ('FULL'), ('FULLTEXTTABLE'), ('FUSION'), ('GENERAL'), ('GENERATED'), ('GET'), ('GLOBAL'), ('GO'), ('GOTO'),
+       ('GRANT'), ('GROUP'), ('GROUPING'), ('HAVING'), ('HIDDEN'), ('HOLD'), ('HOST'), ('HOUR'), ('IDENTITY'), ('IGNORE'), ('IMMEDIATE'), ('IN'), ('INCLUDE'), ('INDEX'), ('INDICATOR'),
        ('INITIALIZE'), ('INITIALLY'), ('INNER'), ('INOUT'), ('INPUT'), ('INSENSITIVE'), ('INSERT'), ('INT'), ('INTEGER'), ('INTERSECT'), ('INTERSECTION'), ('INTERVAL'),
        ('INTO'), ('IS'), ('ISOLATION'), ('ITERATE'), ('JOIN'), ('KEY'), ('LANGUAGE'), ('LARGE'), ('LAST'), ('LATERAL'), ('LEADING'), ('LEFT'), ('LESS'), ('LEVEL'), ('LIKE'),
        ('LIKE_REGEX'), ('LIMIT'), ('LN'), ('LOCAL'), ('LOCALTIME'), ('LOCALTIMESTAMP'), ('LOCATOR'), ('LOWER'), ('MAP'), ('MATCH'), ('MAX'), ('MEMBER'), ('METHOD'), ('MIN'),
@@ -787,7 +788,7 @@ VALUES ('ABSOLUTE'), ('ACTION'), ('ADA'), ('ADD'), ('ADMIN'), ('ADDRESS'), ('AFT
        ('SQLERROR'), ('SQLEXCEPTION'), ('SQLSTATE'), ('SQLWARNING'), ('START'), ('STATE'), ('STATEMENT'), ('STATIC'), ('STDDEV_POP'), ('STDDEV_SAMP'), ('STRUCTURE'),
        ('SUBMULTISET'), ('SUBSTRING'), ('SUBSTRING_REGEX'), ('SUM'), ('SYMMETRIC'), ('SYSTEM'), ('SYSTEM_USER'), ('TABLE'), ('TEMPORARY'), ('TERMINATE'), ('THAN'), ('THEN'),
        ('TIME'), ('TIMESTAMP'), ('TIMEZONE_HOUR'), ('TIMEZONE_MINUTE'), ('TO'), ('TRAILING'), ('TRANSACTION'), ('TRANSLATE'), ('TRANSLATE_REGEX'), ('TRANSLATION'), ('TREAT'),
-       ('TRIM'), ('TRUE'), ('UESCAPE'), ('UNDER'), ('UNION'), ('UNIQUE'), ('UNKNOWN'), ('UNNEST'), ('UPDATE'), ('UPPER'), ('USAGE'), ('USER'), ('USING'), ('VALUE'), ('VALUES'),
+       ('TRIM'), ('TRUE'), ('TYPE'), ('UESCAPE'), ('UNDER'), ('UNION'), ('UNIQUE'), ('UNKNOWN'), ('UNNEST'), ('UPDATE'), ('UPPER'), ('USAGE'), ('USER'), ('USING'), ('VALUE'), ('VALUES'),
        ('VAR_POP'), ('VAR_SAMP'), ('VARCHAR'), ('VARIABLE'), ('VARYING'), ('WHEN'), ('WHENEVER'), ('WHERE'), ('WIDTH_BUCKET'), ('VIEW'), ('WINDOW'), ('WITH'), ('WITHIN'),
        ('WITHOUT'), ('WORK'), ('WRITE'), ('XMLAGG'), ('XMLATTRIBUTES'), ('XMLBINARY'), ('XMLCAST'), ('XMLCOMMENT'), ('XMLCONCAT'), ('XMLDOCUMENT'), ('XMLELEMENT'), ('XMLEXISTS'),
        ('XMLFOREST'), ('XMLITERATE'), ('XMLNAMESPACES'), ('XMLPARSE'), ('XMLPI'), ('XMLQUERY'), ('XMLSERIALIZE'), ('XMLTABLE'), ('XMLTEXT'), ('XMLVALIDATE'), ('YEAR'), ('ZONE');
@@ -959,6 +960,9 @@ IF (@has_cols_or_params=1) BEGIN;
 	             WHEN col.default_name IS NOT NULL THEN (CASE WHEN col.default_is_system_named=0 THEN 'CONSTRAINT '+col.default_name+' ' ELSE '' END)+
 	                                                    (CASE WHEN col.default_name IS NOT NULL THEN ISNULL('DEFAULT '+col.[definition], '') ELSE '' END)
                  ELSE ''
+                 END)+
+           (CASE WHEN col.is_hidden=1 THEN ' HIDDEN'
+                 ELSE ''
                  END) AS [Ident/default],
 	       ISNULL('COLLATE '+NULLIF(col.collation_name, CAST(DATABASEPROPERTYEX(DB_NAME(),'collation') AS varchar(255))), '') AS [Collation],
 	       (CASE WHEN obj.[type]='SO' THEN ''
@@ -982,7 +986,7 @@ IF (@has_cols_or_params=1) BEGIN;
              CAST(NULL AS bit) AS is_readonly, CAST(NULL AS bit) AS is_table_type,
 		     seed_value, increment_value, [definition], is_persisted, [type_name],
 		     default_name, default_is_system_named, CAST(NULL AS varchar(max)) AS tbl_type_cols,
-             current_value, generated_always_type_desc
+             current_value, generated_always_type_desc, is_hidden
 	      FROM @syscolumns
 	      WHERE [object_id]=@object_id
 	      UNION ALL
@@ -990,7 +994,7 @@ IF (@has_cols_or_params=1) BEGIN;
 		     max_length, [precision], scale, NULL, is_nullable, NULL,
 		     NULL, xml_collection_id, NULL, is_output, is_readonly,
              is_table_type, NULL, NULL, NULL, NULL, [type_name], NULL, NULL, tbl_type_cols,
-             NULL AS current_value, NULL AS generated_always_type_desc
+             NULL AS current_value, NULL AS generated_always_type_desc, NULL AS is_hidden
 	      FROM @sysparameters
 	      ) AS col
 	LEFT JOIN @xmlschemacollections AS xsc ON col.xml_collection_id=xsc.xml_collection_id
