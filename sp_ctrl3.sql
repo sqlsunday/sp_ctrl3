@@ -3,9 +3,9 @@ USE master
 */
 
 
-IF (OBJECT_ID('dbo.sp_ctrl3') IS NULL)
+IF (OBJECT_ID(N'dbo.sp_ctrl3') IS NULL)
 	--- Placeholder:
-	EXEC('CREATE PROCEDURE dbo.sp_ctrl3 AS ---');
+	EXEC(N'CREATE PROCEDURE dbo.sp_ctrl3 AS ---');
 GO
 /*
 
@@ -36,7 +36,7 @@ SHORTCUT:   In SQL Server Management Studio, go to Tools -> Options
             schema (with a dot) need to be enclosed in quotes for this
             to work in older versions of SSMS.
 
-VERSION:    2021-06-12
+VERSION:    2021-08-07
 
 */
 
@@ -51,7 +51,7 @@ SET DEADLOCK_PRIORITY LOW;
 SET LOCK_TIMEOUT 500;
 
 DECLARE @object_id              int,
-        @object_id_str          varchar(20),
+        @object_id_str          nvarchar(20),
         @type                   char(2),
         @database_id            int,
         @database               sysname,
@@ -64,7 +64,7 @@ DECLARE @object_id              int,
 	    @has_permissions        bit,
 	    @has_sql_module         bit,
 	    @has_data               bit,
-		@is_azure_sql_db		bit=(CASE WHEN CAST(SERVERPROPERTY('Edition') AS varchar(100)) LIKE '%Azure%' THEN 1 ELSE 0 END),
+		@is_azure_sql_db		bit=(CASE WHEN CAST(SERVERPROPERTY(N'Edition') AS varchar(100)) LIKE N'%Azure%' THEN 1 ELSE 0 END),
 	    @is_tempdb              bit=0,
         @module_definition      nvarchar(max),
         @uses_ansi_nulls        bit,
@@ -72,7 +72,7 @@ DECLARE @object_id              int,
         @temp                   nvarchar(max),
         @default_fill_factor    tinyint=(SELECT TOP (1) CAST((CASE [value] WHEN 100 THEN 0 ELSE [value] END) AS tinyint)
                                          FROM sys.configurations
-                                         WHERE [name] LIKE '%fill factor%');
+                                         WHERE [name] LIKE N'%fill factor%');
 
 --- These are special (unicode) characters, used to display the graph output:
 DECLARE @inf  nchar(1)=NCHAR(8734),          --- Infinity symbol
@@ -84,8 +84,8 @@ DECLARE @inf  nchar(1)=NCHAR(8734),          --- Infinity symbol
         @cr   nchar(1)=NCHAR(13);            --- Carriage return
 
 SET @object_id=OBJECT_ID(@objname);
-IF (@objname LIKE '#%')
-    SELECT @is_tempdb=1, @object_id=OBJECT_ID('tempdb.dbo.'+@objname);
+IF (@objname LIKE N'#%')
+    SELECT @is_tempdb=1, @object_id=OBJECT_ID(N'tempdb.dbo.'+@objname);
 
 IF (@object_id IS NULL)
     SELECT @object_id=tt.type_table_object_id
@@ -94,12 +94,12 @@ IF (@object_id IS NULL)
 
 SELECT @database_id=database_id, @database=QUOTENAME([name]), @compatibility_level=[compatibility_level]
 FROM sys.databases
-WHERE @objname LIKE '#%' AND name='tempdb' OR
-      @objname LIKE '\[%\].%' ESCAPE '\' AND @objname LIKE '%.%.%' AND name=SUBSTRING(@objname, 2, NULLIF(CHARINDEX('].', @objname), 0)-2) OR
-      @objname NOT LIKE '[\[#]%' ESCAPE '\' AND @objname LIKE '%.%.%' AND name=LEFT(@objname, NULLIF(CHARINDEX('.', @objname), 0)-1) OR
-      @objname NOT LIKE '%.%.%' AND @objname NOT LIKE '#%' AND database_id=DB_ID();
+WHERE @objname LIKE N'#%' AND [name]=N'tempdb' OR
+      @objname LIKE N'\[%\].%' ESCAPE N'\' AND @objname LIKE N'%.%.%' AND [name]=SUBSTRING(@objname, 2, NULLIF(CHARINDEX(N'].', @objname), 0)-2) OR
+      @objname NOT LIKE N'[\[#]%' ESCAPE N'\' AND @objname LIKE N'%.%.%' AND [name]=LEFT(@objname, NULLIF(CHARINDEX(N'.', @objname), 0)-1) OR
+      @objname NOT LIKE N'%.%.%' AND @objname NOT LIKE N'#%' AND database_id=DB_ID();
 
-SET @object_id_str=CAST(@object_id AS varchar(20));
+SET @object_id_str=CAST(@object_id AS nvarchar(20));
 
 -------------------------------------------------------------------------------
 --- If database object isn't found, try a plaintext search instead.
@@ -109,40 +109,40 @@ IF (@object_id IS NULL) BEGIN;
     WITH rcte AS (
         SELECT [object_id], 0 AS line, CAST(NULL AS nvarchar(max)) AS [sql], REPLACE([definition], NCHAR(13)+NCHAR(10), NCHAR(13)) AS remain
         FROM sys.sql_modules
-        WHERE [definition] LIKE N'%'+@objname+'%'
+        WHERE [definition] LIKE N'%'+@objname+N'%'
 
         UNION ALL
 
         SELECT [object_id], line+1,
-               CAST(LEFT(remain, PATINDEX(N'%['+NCHAR(10)+NCHAR(13)+']%', remain+NCHAR(13))-1) AS nvarchar(max)),
-               CAST(SUBSTRING(remain, PATINDEX(N'%['+NCHAR(10)+NCHAR(13)+']%', remain+NCHAR(13))+1, LEN(remain)) AS nvarchar(max))
+               CAST(LEFT(remain, PATINDEX(N'%['+NCHAR(10)+NCHAR(13)+N']%', remain+NCHAR(13))-1) AS nvarchar(max)),
+               CAST(SUBSTRING(remain, PATINDEX(N'%['+NCHAR(10)+NCHAR(13)+N']%', remain+NCHAR(13))+1, LEN(remain)) AS nvarchar(max))
         FROM rcte
-        WHERE remain LIKE N'%'+@objname+'%')
+        WHERE remain LIKE N'%'+@objname+N'%')
 
     SELECT o.[type_desc] AS [Type], s.[name]+N'.'+o.[name] AS [Object], STR(line, 5, 0) AS [Line no], [sql] AS [Definition]
     FROM rcte
     INNER JOIN sys.objects AS o ON rcte.[object_id]=o.[object_id]
     INNER JOIN sys.schemas AS s ON o.[schema_id]=s.[schema_id]
-    WHERE rcte.[sql] LIKE '%'+@objname+'%'
+    WHERE rcte.[sql] LIKE N'%'+@objname+N'%'
 
     UNION ALL
 
-    SELECT t.[type_desc], s.[name]+N'.'+t.[name], '', ISNULL(c.[name], '')
+    SELECT t.[type_desc], s.[name]+N'.'+t.[name], '', ISNULL(c.[name], N'')
     FROM sys.tables AS t
     INNER JOIN sys.schemas AS s ON t.[schema_id]=s.[schema_id]
-    LEFT JOIN sys.columns AS c ON t.[object_id]=c.[object_id] AND c.[name] LIKE '%'+@objname+'%'
+    LEFT JOIN sys.columns AS c ON t.[object_id]=c.[object_id] AND c.[name] LIKE N'%'+@objname+N'%'
     LEFT JOIN sys.extended_properties AS ep ON ep.class=1 AND ep.major_id=t.[object_id] AND ep.minor_id=c.column_id
-    WHERE t.[name] LIKE '%'+@objname+'%' OR
-          c.[name] LIKE '%'+@objname+'%' OR
-          CAST(ep.[value] AS nvarchar(max)) LIKE '%'+@objname+'%'
+    WHERE t.[name] LIKE N'%'+@objname+N'%' OR
+          c.[name] LIKE N'%'+@objname+N'%' OR
+          CAST(ep.[value] AS nvarchar(max)) LIKE N'%'+@objname+N'%'
 
     UNION ALL
 
-    SELECT 'SCHEMA' AS [Type], s.[name] AS [Object], '' AS [Line no], ISNULL(CAST(ep.[value] AS nvarchar(max)), '') AS [Definition]
+    SELECT N'SCHEMA' AS [Type], s.[name] AS [Object], '' AS [Line no], ISNULL(CAST(ep.[value] AS nvarchar(max)), N'') AS [Definition]
     FROM sys.schemas AS s
     LEFT JOIN sys.extended_properties AS ep ON ep.class=3 AND ep.major_id=s.[schema_id]
-    WHERE s.[name] LIKE '%'+@objname+'%' OR
-          CAST(ep.[value] AS nvarchar(max)) LIKE '%'+@objname+'%'
+    WHERE s.[name] LIKE N'%'+@objname+N'%' OR
+          CAST(ep.[value] AS nvarchar(max)) LIKE N'%'+@objname+N'%'
 
     ORDER BY [Object], [Line no]
     OPTION (MAXRECURSION 0);
@@ -438,172 +438,172 @@ DECLARE @extended_properties TABLE (
 
 IF (@is_azure_sql_db=1)
 	INSERT INTO @spt_values_O9T ([name])
-	EXEC('
+	EXEC(N'
 		SELECT DISTINCT [type]+N'': ''+LOWER([type_desc])
 		FROM sys.objects');
 
 IF (@is_azure_sql_db=0)
 	INSERT INTO @spt_values_O9T ([name])
-	EXEC('
+	EXEC(N'
 		SELECT [name]
 		FROM master.dbo.spt_values
-		WHERE [type]=''O9T''');
+		WHERE [type]=N''O9T''');
 
-SET @temp='
+SET @temp=N'
 SELECT ISNULL(tt.[schema_id], o.[schema_id]), o.[object_id], o.principal_id, o.[type], o.[type_desc], ISNULL(tt.[name], o.[name]),
-       '+(CASE WHEN @compatibility_level>=120 THEN 'ISNULL(t.is_memory_optimized, 0), t.durability_desc' ELSE '0, NULL' END)+',
-       '+(CASE WHEN @compatibility_level>=130 THEN 't.temporal_type_desc, t.history_table_id' ELSE 'NULL, NULL' END)+',
+       '+(CASE WHEN @compatibility_level>=120 THEN N'ISNULL(t.is_memory_optimized, 0), t.durability_desc' ELSE N'0, NULL' END)+N',
+       '+(CASE WHEN @compatibility_level>=130 THEN N't.temporal_type_desc, t.history_table_id' ELSE N'NULL, NULL' END)+N',
        (CASE WHEN ct.[object_id] IS NOT NULL THEN 1 ELSE 0 END), ISNULL(ct.is_track_columns_updated_on, 0), ct.min_valid_version
-FROM '+@database+'.sys.objects AS o
-LEFT JOIN '+@database+'.sys.tables AS t ON o.[object_id]=t.[object_id]
-LEFT JOIN '+@database+'.sys.table_types AS tt ON tt.type_table_object_id=o.[object_id]
-LEFT JOIN '+@database+'.sys.change_tracking_tables AS ct ON t.[object_id]=ct.[object_id]'
+FROM '+@database+N'.sys.objects AS o
+LEFT JOIN '+@database+N'.sys.tables AS t ON o.[object_id]=t.[object_id]
+LEFT JOIN '+@database+N'.sys.table_types AS tt ON tt.type_table_object_id=o.[object_id]
+LEFT JOIN '+@database+N'.sys.change_tracking_tables AS ct ON t.[object_id]=ct.[object_id]'
 
 INSERT INTO @sysobjects
 EXEC(@temp);
 
 INSERT INTO @sysschemas
-EXEC('
+EXEC(N'
 SELECT [schema_id], principal_id, name
-FROM '+@database+'.sys.schemas');
+FROM '+@database+N'.sys.schemas');
 
 SET @temp=(CASE
        WHEN @compatibility_level>=130
-       THEN 'c.generated_always_type_desc, c.is_hidden'
-       ELSE 'NULL, NULL' END);
+       THEN N'c.generated_always_type_desc, c.is_hidden'
+       ELSE N'NULL, NULL' END);
 
 INSERT INTO @syscolumns
-EXEC('
+EXEC(N'
 SELECT c.[object_id], c.column_id, c.[name], c.user_type_id, c.system_type_id,
        c.max_length, c.[precision], c.scale, c.is_sparse, c.is_nullable,
        c.collation_name, c.is_ansi_padded, c.xml_collection_id, c.default_object_id,
        ic.seed_value, ic.increment_value, ISNULL(cc.[definition], d.[definition]), cc.is_persisted,
        t.[name] AS [type_name], d.[name] AS default_name,
-       d.is_system_named AS default_is_system_named, NULL AS current_value, '+@temp+'
-FROM '+@database+'.sys.columns AS c
-LEFT JOIN '+@database+'.sys.identity_columns AS ic ON c.[object_id]=ic.[object_id] AND c.column_id=ic.column_id
-LEFT JOIN '+@database+'.sys.computed_columns AS cc ON c.[object_id]=cc.[object_id] AND c.column_id=cc.column_id
-LEFT JOIN '+@database+'.sys.types AS t ON c.user_type_id=t.user_type_id
-LEFT JOIN '+@database+'.sys.default_constraints AS d ON d.[object_id]=c.default_object_id');
+       d.is_system_named AS default_is_system_named, NULL AS current_value, '+@temp+N'
+FROM '+@database+N'.sys.columns AS c
+LEFT JOIN '+@database+N'.sys.identity_columns AS ic ON c.[object_id]=ic.[object_id] AND c.column_id=ic.column_id
+LEFT JOIN '+@database+N'.sys.computed_columns AS cc ON c.[object_id]=cc.[object_id] AND c.column_id=cc.column_id
+LEFT JOIN '+@database+N'.sys.types AS t ON c.user_type_id=t.user_type_id
+LEFT JOIN '+@database+N'.sys.default_constraints AS d ON d.[object_id]=c.default_object_id');
 
 BEGIN TRY;
     INSERT INTO @syscolumns
-    EXEC('
+    EXEC(N'
     SELECT s.[object_id], 1 AS column_id, s.[name], s.user_type_id, s.system_type_id,
            8 AS max_length, s.[precision], s.scale, 0 AS is_sparse, 0 AS is_nullable,
            NULL AS collation_name, 0 AS is_ansi_padded, 0 AS xml_collection_id, 0 AS default_object_id,
            s.start_value AS seed_value, s.increment AS increment_value,
        
-           ISNULL('' MINVALUE ''+CAST(NULLIF(s.minimum_value, (CASE st.[name]
-                WHEN ''tinyint'' THEN 0
-                WHEN ''smallint'' THEN -32768
-                WHEN ''int'' THEN -2147483648
-                WHEN ''bigint'' THEN -9223372036854775808
-            END)) AS varchar(40)), '''')+
-            ISNULL('' MAXVALUE ''+CAST(NULLIF(s.maximum_value, (CASE st.[name]
-                WHEN ''tinyint'' THEN 255
-                WHEN ''smallint'' THEN 32767
-                WHEN ''int'' THEN 2147483647
-                WHEN ''bigint'' THEN 9223372036854775807
-            END)) AS varchar(40)), '''')+
-            (CASE WHEN s.is_cycling=1 THEN '' CYCLE'' ELSE '''' END)+
-            (CASE WHEN s.is_cached=0 THEN '' NOCACHE''
-                  WHEN s.is_cached=1 THEN ISNULL(''CACHE ''+CAST(s.cache_size AS varchar(10)), '''')
+           ISNULL(N'' MINVALUE ''+CAST(NULLIF(s.minimum_value, (CASE st.[name]
+                WHEN N''tinyint'' THEN 0
+                WHEN N''smallint'' THEN -32768
+                WHEN N''int'' THEN -2147483648
+                WHEN N''bigint'' THEN -9223372036854775808
+            END)) AS nvarchar(40)), N'''')+
+            ISNULL(N'' MAXVALUE ''+CAST(NULLIF(s.maximum_value, (CASE st.[name]
+                WHEN N''tinyint'' THEN 255
+                WHEN N''smallint'' THEN 32767
+                WHEN N''int'' THEN 2147483647
+                WHEN N''bigint'' THEN 9223372036854775807
+            END)) AS nvarchar(40)), N'''')+
+            (CASE WHEN s.is_cycling=1 THEN N'' CYCLE'' ELSE N'''' END)+
+            (CASE WHEN s.is_cached=0 THEN N'' NOCACHE''
+                  WHEN s.is_cached=1 THEN ISNULL(N''CACHE ''+CAST(s.cache_size AS nvarchar(10)), '''')
                   END) AS [definition], 0 AS is_persisted,
            t.[name] AS [type_name], NULL AS default_name, 1 AS default_is_system_named, s.current_value
-    FROM '+@database+'.sys.sequences AS s
-    LEFT JOIN '+@database+'.sys.types AS t ON s.user_type_id=t.user_type_id
-    LEFT JOIN '+@database+'.sys.types AS st ON s.system_type_id=st.user_type_id
+    FROM '+@database+N'.sys.sequences AS s
+    LEFT JOIN '+@database+N'.sys.types AS t ON s.user_type_id=t.user_type_id
+    LEFT JOIN '+@database+N'.sys.types AS st ON s.system_type_id=st.user_type_id
     ');
 END TRY
 BEGIN CATCH;
     PRINT 'sys.sequences could not be loaded.';
 END CATCH;
 
-SET @temp=(CASE WHEN SERVERPROPERTY('ProductVersion')>='12' THEN 'p.is_nullable' ELSE '1' END);
+SET @temp=(CASE WHEN SERVERPROPERTY('ProductVersion')>=N'12' THEN N'p.is_nullable' ELSE N'1' END);
 
 INSERT INTO @sysparameters
-EXEC('
+EXEC(N'
 SELECT p.parameter_id, p.[name], p.user_type_id, p.system_type_id, p.max_length, p.[precision],
-        p.scale, '+@temp+', p.xml_collection_id, p.is_output, p.is_readonly, t.is_table_type,
-        ISNULL(s.[name]+''.'', '''')+t.[name] AS [type_name],
-	''(''+SUBSTRING(CAST((SELECT '', ''+ttc.[name]
-	FROM '+@database+'.sys.columns AS ttc
-	WHERE ttc.[object_id]=tt.type_table_object_id
-	ORDER BY ttc.column_id
-	FOR XML PATH(''''), TYPE) AS varchar(max)), 3, 8000)+'')'' AS tbl_type_cols
-FROM '+@database+'.sys.parameters AS p
-LEFT JOIN '+@database+'.sys.types AS t ON p.user_type_id=t.user_type_id
-LEFT JOIN '+@database+'.sys.table_types AS tt ON t.user_type_id=tt.user_type_id
-LEFT JOIN '+@database+'.sys.schemas AS s ON t.is_table_type=1 AND t.[schema_id]=s.[schema_id]
+       p.scale, '+@temp+N', p.xml_collection_id, p.is_output, p.is_readonly, t.is_table_type,
+       ISNULL(s.[name]+N''.'', N'''')+t.[name] AS [type_name],
+	   N''(''+SUBSTRING(CAST((SELECT N'', ''+ttc.[name]
+	                          FROM '+@database+N'.sys.columns AS ttc
+	                          WHERE ttc.[object_id]=tt.type_table_object_id
+	                          ORDER BY ttc.column_id
+	                          FOR XML PATH(N''''), TYPE) AS varchar(max)), 3, 8000)+N'')'' AS tbl_type_cols
+FROM '+@database+N'.sys.parameters AS p
+LEFT JOIN '+@database+N'.sys.types AS t ON p.user_type_id=t.user_type_id
+LEFT JOIN '+@database+N'.sys.table_types AS tt ON t.user_type_id=tt.user_type_id
+LEFT JOIN '+@database+N'.sys.schemas AS s ON t.is_table_type=1 AND t.[schema_id]=s.[schema_id]
 WHERE p.[object_id]='+@object_id_str);
 
-SET @temp=(CASE WHEN SERVERPROPERTY('ProductVersion')>='13' THEN 'ix.[compression_delay]' ELSE 'NULL' END);
+SET @temp=(CASE WHEN SERVERPROPERTY('ProductVersion')>=N'13' THEN N'ix.[compression_delay]' ELSE N'NULL' END);
 
 INSERT INTO @sysindexes
-EXEC('
+EXEC(N'
 SELECT ix.[object_id], ix.index_id, ix.[name], ix.[type], ix.[type_desc], ix.data_space_id,
        ix.is_primary_key, ix.is_unique_constraint, ix.is_unique, ix.filter_definition,
        ix.fill_factor, ix.[allow_row_locks], ix.[allow_page_locks], ix.is_padded, ix.has_filter,
-	   ISNULL(kc.is_system_named, 0), NULL, '+@temp+'
-FROM '+@database+'.sys.indexes AS ix
-LEFT JOIN '+@database+'.sys.key_constraints AS kc ON ix.[object_id]=kc.parent_object_id AND ix.[name]=kc.[name]
-WHERE ix.is_hypothetical=0 AND ix.[type_desc] NOT LIKE ''%HASH%''');
+	   ISNULL(kc.is_system_named, 0), NULL, '+@temp+N'
+FROM '+@database+N'.sys.indexes AS ix
+LEFT JOIN '+@database+N'.sys.key_constraints AS kc ON ix.[object_id]=kc.parent_object_id AND ix.[name]=kc.[name]
+WHERE ix.is_hypothetical=0 AND ix.[type_desc] NOT LIKE N''%HASH%''');
 
 IF (@compatibility_level>=120)
     INSERT INTO @sysindexes
-    EXEC('
+    EXEC(N'
     SELECT ix.[object_id], ix.index_id, ix.[name], ix.[type], ix.[type_desc], ix.data_space_id,
            ix.is_primary_key, ix.is_unique_constraint, ix.is_unique, ix.filter_definition,
            ix.fill_factor, ix.[allow_row_locks], ix.[allow_page_locks], ix.is_padded, ix.has_filter,
 	       ISNULL(kc.is_system_named, 0), ix.[bucket_count], NULL
-    FROM '+@database+'.sys.hash_indexes AS ix
-    LEFT JOIN '+@database+'.sys.key_constraints AS kc ON ix.[object_id]=kc.parent_object_id AND ix.[name]=kc.[name]
+    FROM '+@database+N'.sys.hash_indexes AS ix
+    LEFT JOIN '+@database+N'.sys.key_constraints AS kc ON ix.[object_id]=kc.parent_object_id AND ix.[name]=kc.[name]
     WHERE ix.is_hypothetical=0');
 
 INSERT INTO @sysindexcolumns
-EXEC('
+EXEC(N'
 SELECT [object_id], index_id, index_column_id, column_id, key_ordinal,
         partition_ordinal, is_descending_key, is_included_column
-FROM '+@database+'.sys.index_columns');
+FROM '+@database+N'.sys.index_columns');
 
 INSERT INTO @sysforeignkeys
-EXEC('
+EXEC(N'
 SELECT [object_id], name, parent_object_id, referenced_object_id,
         delete_referential_action_desc, update_referential_action_desc,
         is_system_named, is_disabled, is_not_trusted
-FROM '+@database+'.sys.foreign_keys');
+FROM '+@database+N'.sys.foreign_keys');
 
 INSERT INTO @sysforeignkeycols
-EXEC('
+EXEC(N'
 SELECT constraint_object_id, constraint_column_id, parent_object_id,
         parent_column_id, referenced_object_id, referenced_column_id
-FROM '+@database+'.sys.foreign_key_columns');
+FROM '+@database+N'.sys.foreign_key_columns');
 
 INSERT INTO @extended_properties
-EXEC('
+EXEC(N'
 SELECT major_id, minor_id, [name], [value]
-FROM '+@database+'.sys.extended_properties
+FROM '+@database+N'.sys.extended_properties
 WHERE class=1;');
 
 INSERT INTO @xmlschemacollections
-EXEC('
+EXEC(N'
 SELECT xml_collection_id, [schema_id], name
-FROM '+@database+'.sys.xml_schema_collections');
+FROM '+@database+N'.sys.xml_schema_collections');
 
 INSERT INTO @sysdataspaces
-EXEC('
+EXEC(N'
 SELECT data_space_id, name, [type], is_default
-FROM '+@database+'.sys.data_spaces');
+FROM '+@database+N'.sys.data_spaces');
 
 INSERT INTO @sysdatabaseprincipals
-EXEC('
+EXEC(N'
 SELECT principal_id, name
-FROM '+@database+'.sys.database_principals');
+FROM '+@database+N'.sys.database_principals');
 
-SET @temp='
-SELECT [definition], uses_ansi_nulls, uses_quoted_identifier, is_schema_bound'+(CASE WHEN @compatibility_level>=120 THEN ', uses_native_compilation' ELSE ', NULL' END)+'
-FROM '+@database+'.sys.sql_modules
+SET @temp=N'
+SELECT [definition], uses_ansi_nulls, uses_quoted_identifier, is_schema_bound'+(CASE WHEN @compatibility_level>=120 THEN N', uses_native_compilation' ELSE N', NULL' END)+N'
+FROM '+@database+N'.sys.sql_modules
 WHERE [object_id]='+@object_id_str
 
 INSERT INTO @syssqlmodules
@@ -616,7 +616,7 @@ FROM @syssqlmodules;
 
 BEGIN TRY;
 	INSERT INTO @sysexprdependencies
-	EXEC('
+	EXEC(N'
     SELECT referencing_id,
            referenced_id,
            is_schema_bound_reference
@@ -627,8 +627,8 @@ BEGIN TRY;
                                  (CASE WHEN d.referenced_server_name IS NULL AND d.referenced_database_name IS NULL
                                        THEN OBJECT_ID(ISNULL(QUOTENAME(referenced_schema_name)+N''.'', N'''')+QUOTENAME(d.referenced_entity_name)) END)) AS referenced_id,
 					    (CASE WHEN ct.user_type_id IS NOT NULL THEN 1 ELSE d.is_schema_bound_reference END) AS is_schema_bound_reference
-	    FROM '+@database+'.sys.sql_expression_dependencies AS d
-	    LEFT JOIN '+@database+'.sys.table_types AS ct ON d.referenced_class=6  AND d.referenced_id=ct.user_type_id
+	    FROM '+@database+N'.sys.sql_expression_dependencies AS d
+	    LEFT JOIN '+@database+N'.sys.table_types AS ct ON d.referenced_class=6  AND d.referenced_id=ct.user_type_id
 	    WHERE d.referencing_class=1 AND
 		      d.referenced_class IN (1, 6)
         ) AS sub
@@ -639,19 +639,19 @@ BEGIN CATCH;
 END CATCH;
 
 INSERT INTO @syspartitions
-EXEC('
+EXEC(N'
 SELECT p.[partition_id], p.[object_id], p.index_id, p.partition_number, p.[rows], p.data_compression_desc, pf.boundary_value_on_right, prv.boundary, prv.boundary_type, 0
-FROM '+@database+'.sys.partitions AS p
-LEFT JOIN '+@database+'.sys.indexes AS i ON p.[object_id]=i.[object_id] AND p.index_id=i.index_id AND p.[object_id]='+@object_id_str+'
-LEFT JOIN '+@database+'.sys.partition_schemes AS ps ON i.data_space_id=ps.data_space_id
-LEFT JOIN '+@database+'.sys.partition_functions AS pf ON ps.function_id=pf.function_id
+FROM '+@database+N'.sys.partitions AS p
+LEFT JOIN '+@database+N'.sys.indexes AS i ON p.[object_id]=i.[object_id] AND p.index_id=i.index_id AND p.[object_id]='+@object_id_str+N'
+LEFT JOIN '+@database+N'.sys.partition_schemes AS ps ON i.data_space_id=ps.data_space_id
+LEFT JOIN '+@database+N'.sys.partition_functions AS pf ON ps.function_id=pf.function_id
 LEFT JOIN (
-    SELECT function_id, boundary_id, CAST(SQL_VARIANT_PROPERTY([value], ''BaseType'') AS sysname) AS boundary_type,
+    SELECT function_id, boundary_id, CAST(SQL_VARIANT_PROPERTY([value], N''BaseType'') AS sysname) AS boundary_type,
            (CASE 
-            WHEN CAST(SQL_VARIANT_PROPERTY([value], ''BaseType'') AS sysname)=N''date'' THEN LEFT(CONVERT(nvarchar(max), [value], 120), 10)
-            WHEN CAST(SQL_VARIANT_PROPERTY([value], ''BaseType'') AS sysname) LIKE N''%datetime%'' THEN CONVERT(nvarchar(max), [value], 120)
+            WHEN CAST(SQL_VARIANT_PROPERTY([value], N''BaseType'') AS sysname)=N''date'' THEN LEFT(CONVERT(nvarchar(max), [value], 120), 10)
+            WHEN CAST(SQL_VARIANT_PROPERTY([value], N''BaseType'') AS sysname) LIKE N''%datetime%'' THEN CONVERT(nvarchar(max), [value], 120)
             ELSE CAST([value] AS nvarchar(max)) END) AS boundary
-    FROM '+@database+'.sys.partition_range_values
+    FROM '+@database+N'.sys.partition_range_values
     WHERE parameter_id=1
     ) AS prv ON pf.function_id=prv.function_id AND p.partition_number=prv.boundary_id');
 
@@ -666,7 +666,7 @@ FROM (
            TRY_CAST(boundary AS bigint) AS b,
            TRY_CAST(LEAD(boundary, 1) OVER (PARTITION BY [object_id], index_id ORDER BY partition_number) AS bigint) AS c
     FROM @syspartitions
-    WHERE boundary_type IN ('bit', 'tinyint', 'smallint', 'int', 'bigint')
+    WHERE boundary_type IN (N'bit', N'tinyint', N'smallint', N'int', N'bigint')
     ) AS sub
 WHERE a+1=b AND b+1=ISNULL(c, b+1);
 
@@ -678,17 +678,17 @@ FROM (
            TRY_CAST(boundary AS date) AS b,
            TRY_CAST(LEAD(boundary, 1) OVER (PARTITION BY [object_id], index_id ORDER BY partition_number) AS date) AS c
     FROM @syspartitions
-    WHERE boundary_type IN ('date')
+    WHERE boundary_type IN (N'date')
     ) AS sub
 WHERE DATEADD(day, 1, a)=b AND DATEADD(day, 1, b)=ISNULL(c, DATEADD(day, 1, b));
 
 BEGIN TRY;
 	INSERT INTO @syspartitionstats
-	EXEC('
+	EXEC(N'
 	SELECT ps.[partition_id], ps.row_count, ps.in_row_used_page_count, ps.reserved_page_count,
 		   ps.row_overflow_used_page_count, ps.lob_used_page_count, ps.used_page_count
-	FROM '+@database+'.sys.dm_db_partition_stats AS ps
-	INNER JOIN '+@database+'.sys.partitions AS p ON ps.[partition_id]=p.[partition_id]');
+	FROM '+@database+N'.sys.dm_db_partition_stats AS ps
+	INNER JOIN '+@database+N'.sys.partitions AS p ON ps.[partition_id]=p.[partition_id]');
 END TRY
 BEGIN CATCH;
 	PRINT 'Problem compiling partition stats: '+ERROR_MESSAGE();
@@ -696,9 +696,9 @@ END CATCH;
 
 BEGIN TRY;
     INSERT INTO @columnstore_rowgroups
-    EXEC('
+    EXEC(N'
     SELECT [object_id], index_id, partition_number, [state], SUM(total_rows), SUM(size_in_bytes)
-    FROM '+@database+'.sys.column_store_row_groups
+    FROM '+@database+N'.sys.column_store_row_groups
     WHERE [object_id]='+@object_id_str+N'
     GROUP BY [object_id], index_id, partition_number, [state]');
 END TRY
@@ -708,55 +708,37 @@ END CATCH;
 
 
 INSERT INTO @sysdatabasepermissions
-EXEC('
+EXEC(N'
 SELECT class, class_desc, major_id, minor_id, grantee_principal_id,
        grantor_principal_id, [type], [permission_name], [state], state_desc
-FROM '+@database+'.sys.database_permissions');
+FROM '+@database+N'.sys.database_permissions');
 
 INSERT INTO @signatures
-EXEC('
-SELECT ask.[name], (CASE ask.pvt_key_encryption_type WHEN ''PW'' THEN ''PASSWORD=''''*****'''''' END) AS encryption_type_desc, sg.[type] AS [type_desc], sg.[entity_id] AS major_id
-FROM '+@database+'.sys.asymmetric_keys AS ask
-CROSS APPLY '+@database+'.sys.fn_check_object_signatures (''asymmetric key'', ask.thumbprint) AS sg
-INNER JOIN '+@database+'.sys.objects AS o ON sg.[entity_id]=o.[object_id] AND sg.[type]=o.[type_desc]
+EXEC(N'
+SELECT ask.[name], (CASE ask.pvt_key_encryption_type WHEN N''PW'' THEN ''PASSWORD=N''''*****'''''' END) AS encryption_type_desc, sg.[type] AS [type_desc], sg.[entity_id] AS major_id
+FROM '+@database+N'.sys.asymmetric_keys AS ask
+CROSS APPLY '+@database+N'.sys.fn_check_object_signatures (N''asymmetric key'', ask.thumbprint) AS sg
+INNER JOIN '+@database+N'.sys.objects AS o ON sg.[entity_id]=o.[object_id] AND sg.[type]=o.[type_desc]
 WHERE sg.is_signed=1
-  AND o.[object_id]='+@object_id_str+';
+  AND o.[object_id]='+@object_id_str+N';
 
-SELECT crt.[name], (CASE crt.pvt_key_encryption_type WHEN ''PW'' THEN ''PASSWORD=''''*****'''''' END) AS encryption_type_desc, sg.[type] AS [type_desc], sg.[entity_id] AS major_id
-FROM '+@database+'.sys.certificates AS crt
-CROSS APPLY '+@database+'.sys.fn_check_object_signatures (''certificate'', crt.thumbprint) AS sg
-INNER JOIN '+@database+'.sys.objects AS o ON sg.[entity_id]=o.[object_id] AND sg.[type]=o.[type_desc]
+SELECT crt.[name], (CASE crt.pvt_key_encryption_type WHEN N''PW'' THEN ''PASSWORD=N''''*****'''''' END) AS encryption_type_desc, sg.[type] AS [type_desc], sg.[entity_id] AS major_id
+FROM '+@database+N'.sys.certificates AS crt
+CROSS APPLY '+@database+N'.sys.fn_check_object_signatures (N''certificate'', crt.thumbprint) AS sg
+INNER JOIN '+@database+N'.sys.objects AS o ON sg.[entity_id]=o.[object_id] AND sg.[type]=o.[type_desc]
 WHERE sg.is_signed=1
   AND o.[object_id]='+@object_id_str+';
 ');
 
 INSERT INTO @systriggers
-EXEC('
+EXEC(N'
 SELECT t.[object_id], t.[name], t.is_disabled, t.is_instead_of_trigger,
-       SUBSTRING(CAST((SELECT '', ''+te.[type_desc] FROM '+@database+'.sys.trigger_events AS te
+       SUBSTRING(CAST((SELECT N'', ''+te.[type_desc]
+                       FROM '+@database+N'.sys.trigger_events AS te
                        WHERE te.[object_id]=t.[object_id]
-                       ORDER BY te.[type] FOR XML PATH(''''), TYPE) AS sysname), 3, 256)
-FROM '+@database+'.sys.triggers AS t
+                       ORDER BY te.[type] FOR XML PATH(N''''), TYPE) AS sysname), 3, 256)
+FROM '+@database+N'.sys.triggers AS t
 WHERE parent_id='+@object_id_str);
-/*
-BEGIN TRY;
-    INSERT INTO @plans (plan_generation_num, query_plan, execution_count, last_execution_time)
-    SELECT qs.plan_generation_num, [plan].query_plan, qs.execution_count, qs.last_execution_time
-    FROM (
-        SELECT plan_generation_num, [sql_handle], plan_handle, execution_count, last_execution_time,
-               ROW_NUMBER() OVER (PARTITION BY [sql_handle], plan_generation_num ORDER BY last_execution_time DESC) AS _rownum
-        FROM sys.dm_exec_query_stats
-        ) AS qs
-    CROSS APPLY sys.dm_exec_sql_text(qs.[sql_handle]) st
-    CROSS APPLY sys.dm_exec_query_plan(qs.plan_handle) AS [plan]
-    WHERE st.objectid=@object_id AND st.[dbid]=@database_id -- DB_ID(@database)
-        AND qs._rownum=1;
-END TRY
-BEGIN CATCH;
-    -- User doesn't have enough permissions to use sys.dm_exec_query_stats.
-    SET @temp=@temp;
-END CATCH;
-*/
 
 -- https://docs.microsoft.com/en-us/sql/t-sql/language-elements/reserved-keywords-transact-sql
 INSERT INTO @reserved_keywords (keyword)
@@ -832,23 +814,23 @@ IF (@type='SP') BEGIN;
 
 		INSERT INTO @definition (id, [definition])
 		EXEC(N'
-			SELECT 1, ''CREATE SECURITY POLICY [''+s.[name] COLLATE database_default+''].[''+p.[name] COLLATE database_default+'']''
-			FROM '+@database+'.sys.schemas AS s
-			INNER JOIN '+@database+'.sys.security_policies AS p ON s.[schema_id]=p.[schema_id]
+			SELECT 1, N''CREATE SECURITY POLICY [''+s.[name] COLLATE database_default+N''].[''+p.[name] COLLATE database_default+N'']''
+			FROM '+@database+N'.sys.schemas AS s
+			INNER JOIN '+@database+N'.sys.security_policies AS p ON s.[schema_id]=p.[schema_id]
 			WHERE p.[object_id]='+@object_id_str+N'
 
 			UNION ALL
 
 			SELECT 1+ROW_NUMBER() OVER (ORDER BY sp.security_predicate_id),
-				    ''   ADD ''+sp.predicate_type_desc COLLATE database_default+'' PREDICATE ''+sp.predicate_definition COLLATE database_default+'' ON [''+os.[name]+''].[''+o.[name]+'']''+
+				    N''   ADD ''+sp.predicate_type_desc COLLATE database_default+N'' PREDICATE ''+sp.predicate_definition COLLATE database_default+N'' ON [''+os.[name]+N''].[''+o.[name]+N'']''+
 					(CASE WHEN LEAD(1, 1, 0) OVER (ORDER BY sp.security_predicate_id)=1
-							THEN '',''
-							ELSE '' WITH (STATE=''+(CASE WHEN p.is_enabled=1 THEN ''ON'' ELSE ''OFF'' END)+
-												(CASE WHEN p.is_schema_bound=1 THEN '', SCHEMABINDING=ON'' ELSE '''' END)+'')'' END) AS [Definition]
-			FROM '+@database+'.sys.security_policies AS p
-			INNER JOIN '+@database+'.sys.security_predicates AS sp ON p.[object_id]=sp.[object_id]
-			INNER JOIN '+@database+'.sys.objects AS o ON sp.target_object_id=o.[object_id]
-			INNER JOIN '+@database+'.sys.schemas AS os ON o.[schema_id]=os.[schema_id]
+							THEN N'',''
+							ELSE N'' WITH (STATE=''+(CASE WHEN p.is_enabled=1 THEN N''ON'' ELSE N''OFF'' END)+
+												(CASE WHEN p.is_schema_bound=1 THEN N'', SCHEMABINDING=ON'' ELSE N'''' END)+N'')'' END) AS [Definition]
+			FROM '+@database+N'.sys.security_policies AS p
+			INNER JOIN '+@database+N'.sys.security_predicates AS sp ON p.[object_id]=sp.[object_id]
+			INNER JOIN '+@database+N'.sys.objects AS o ON sp.target_object_id=o.[object_id]
+			INNER JOIN '+@database+N'.sys.schemas AS os ON o.[schema_id]=os.[schema_id]
 			WHERE p.[object_id]='+@object_id_str+N';');
 
 		SET @module_definition=N'';
@@ -879,20 +861,20 @@ SELECT (CASE WHEN @is_tempdb=1 THEN '' ELSE sch.[name] END) AS [Schema],
 			ELSE '' END), '') AS [Type],
        obj.[object_id],
        own.[name]+(CASE WHEN obj.principal_id IS NULL THEN N' (schema owner)' ELSE N'' END) AS [Owner],
-       (CASE WHEN ix.index_id IS NOT NULL THEN 'ON '+QUOTENAME(ds.[name])+ISNULL('('+c.[name]+')', '') ELSE '' END) AS [Data space],
-       ISNULL('WITH ('+NULLIF(SUBSTRING(
+       (CASE WHEN ix.index_id IS NOT NULL THEN 'ON '+QUOTENAME(ds.[name])+ISNULL(N'('+c.[name]+N')', N'') ELSE N'' END) AS [Data space],
+       ISNULL(N'WITH ('+NULLIF(SUBSTRING(
                 (CASE WHEN obj.history_table_id IS NOT NULL
                       THEN ', SYSTEM_VERSIONING=ON (HISTORY_TABLE='+ISNULL(
                             (SELECT hs.[name]+'.'+ho.[name]
                              FROM @sysschemas AS hs
                              INNER JOIN @sysobjects AS ho ON hs.[schema_id]=ho.[schema_id]
-                             WHERE ho.[object_id]=obj.history_table_id), '##missing##')+')'
+                             WHERE ho.[object_id]=obj.history_table_id), N'##missing##')+')'
                       ELSE '' END)+
                 (CASE WHEN obj.is_memory_optimized=1
-                      THEN ', MEMORY_OPTIMIZED=ON, DURABILITY='+obj.durability_desc
-                      ELSE '' END)+
-                ISNULL(', DATA_COMPRESSION='+NULLIF(NULLIF(p.data_compression_desc, 'NONE'), 'COLUMNSTORE'), ''),
-        	3, 1000), '')+')', '') AS [Options],
+                      THEN N', MEMORY_OPTIMIZED=ON, DURABILITY='+obj.durability_desc
+                      ELSE N'' END)+
+                ISNULL(N', DATA_COMPRESSION='+NULLIF(NULLIF(p.data_compression_desc, N'NONE'), N'COLUMNSTORE'), N''),
+        	3, 1000), N'')+N')', N'') AS [Options],
        (CASE WHEN obj.is_change_tracked=1 THEN (CASE WHEN obj.is_track_columns_updated_on=1 THEN 'Column updates' ELSE 'Table' END) ELSE '' END) AS [Change tracking],
        ISNULL(CAST(NULLIF(obj.min_valid_version, 0) AS varchar(20)), '') AS [CT version],
        (CASE WHEN obj.[type] IN ('IT', 'U', 'S') OR obj.[type]='V' AND ix.index_id=1 THEN
@@ -908,7 +890,7 @@ SELECT (CASE WHEN @is_tempdb=1 THEN '' ELSE sch.[name] END) AS [Schema],
       RIGHT JOIN @syspartitions AS p ON ps.[partition_id]=p.[partition_id]
       LEFT JOIN @sysindexes AS ix ON p.[object_id]=ix.[object_id] AND p.index_id=ix.index_id
       WHERE p.[object_id]=@object_id) AS [Total size],
-     ISNULL(CAST(ep.[value] AS nvarchar(max)), '') AS [Description]
+     ISNULL(CAST(ep.[value] AS nvarchar(max)), N'') AS [Description]
 FROM @sysschemas AS sch
 INNER JOIN @sysobjects AS obj ON sch.[schema_id]=obj.[schema_id]
 LEFT JOIN @sysdatabaseprincipals AS own ON ISNULL(obj.principal_id, sch.principal_id)=own.principal_id
@@ -934,83 +916,82 @@ WHERE obj.[object_id]=@object_id;
 --- Columns: Name/computed/persisted, type/length/prec/scale, identity/default, null/sparse, collation
 IF (@has_cols_or_params=1) BEGIN;
 	SELECT (CASE WHEN col.parameter_id IS NOT NULL AND
-			  col.[name]='' AND
-			  col.is_output=1 THEN 'RETURNS ' ELSE '' END)+
-	       (CASE WHEN col.[name] LIKE '[0-9]%' OR col.[name] LIKE '%[^0-9a-z\_@]%' ESCAPE '\' OR col.[name] IN (SELECT keyword FROM @reserved_keywords) THEN QUOTENAME(col.[name]) ELSE col.[name] END)+
-                 (CASE WHEN obj.[type]!='SO' THEN ISNULL(' AS '+col.[definition]+
+			  col.[name]=N'' AND
+			  col.is_output=1 THEN N'RETURNS ' ELSE N'' END)+
+	       (CASE WHEN col.[name] LIKE N'[0-9]%' OR col.[name] LIKE N'%[^0-9a-z\_@]%' ESCAPE N'\' OR col.[name] IN (SELECT keyword FROM @reserved_keywords) THEN QUOTENAME(col.[name]) ELSE col.[name] END)+
+                 (CASE WHEN obj.[type]!='SO' THEN ISNULL(N' AS '+col.[definition]+
 				 (CASE col.is_persisted
-				  WHEN 0 THEN ''
-				  WHEN 1 THEN ' PERSISTED' END), '') ELSE '' END) AS [Column],
-	       (CASE WHEN obj.[type]='SO' THEN 'AS ' ELSE '' END)+
+				  WHEN 0 THEN N''
+				  WHEN 1 THEN N' PERSISTED' END), N'') ELSE N'' END) AS [Column],
+	       (CASE WHEN obj.[type]='SO' THEN N'AS ' ELSE N'' END)+
 	       (CASE WHEN col.is_persisted IS NULL THEN
                col.[type_name]+(CASE
 			       WHEN col.user_type_id!=col.system_type_id THEN ''
-			       WHEN col.[type_name] LIKE 'n%char%' OR col.[type_name] LIKE 'n%binary%' THEN '('+ISNULL(CAST(NULLIF(col.max_length, -1)/2 AS varchar(max)), 'max')+')'
-			       WHEN col.[type_name] LIKE '%char%' OR col.[type_name] LIKE '%binary%'   THEN '('+ISNULL(CAST(NULLIF(col.max_length, -1)   AS varchar(max)), 'max')+')'
-			       WHEN col.[type_name] IN ('numeric', 'decimal') THEN '('+CAST(col.[precision] AS varchar(max))+', '+CAST(col.scale AS varchar(max))+')'
-			       WHEN col.[type_name]='datetime2' THEN '('+CAST(col.scale AS varchar(max))+')'
-			       WHEN col.[type_name]='xml' THEN ISNULL('('+xsc_sch.[name]+'.'+xsc.[name]+')', '')
-			       ELSE ''
-			       END) ELSE '' END) AS [Datatype],
-	       (CASE WHEN obj.[type]='SO' THEN 'START WITH '+CAST(col.seed_value AS varchar(40))+
-                                           ' INCREMENT BY '+CAST(col.increment_value AS varchar(40))
-                 WHEN col.generated_always_type_desc='AS_ROW_START' THEN 'GENERATED ALWAYS AS ROW START'
-                 WHEN col.generated_always_type_desc='AS_ROW_END' THEN 'GENERATED ALWAYS AS ROW END'
-                 WHEN col.seed_value IS NOT NULL THEN ISNULL('IDENTITY('+CAST(col.seed_value AS varchar(40))+', '+CAST(col.increment_value AS varchar(40))+')', '')
-	             WHEN col.default_name IS NOT NULL THEN (CASE WHEN col.default_is_system_named=0 THEN 'CONSTRAINT '+col.default_name+' ' ELSE '' END)+
-	                                                    (CASE WHEN col.default_name IS NOT NULL THEN ISNULL('DEFAULT '+col.[definition], '') ELSE '' END)
-                 ELSE ''
+			       WHEN col.[type_name] LIKE N'n%char%' OR col.[type_name] LIKE N'n%binary%' THEN N'('+ISNULL(CAST(NULLIF(col.max_length, -1)/2 AS varchar(max)), N'max')+N')'
+			       WHEN col.[type_name] LIKE N'%char%' OR col.[type_name] LIKE N'%binary%'   THEN N'('+ISNULL(CAST(NULLIF(col.max_length, -1)   AS varchar(max)), N'max')+N')'
+			       WHEN col.[type_name] IN (N'numeric', N'decimal') THEN N'('+CAST(col.[precision] AS varchar(max))+N', '+CAST(col.scale AS varchar(max))+N')'
+			       WHEN col.[type_name]=N'datetime2' THEN N'('+CAST(col.scale AS varchar(max))+N')'
+			       WHEN col.[type_name]=N'xml' THEN ISNULL(N'('+xsc_sch.[name]+N'.'+xsc.[name]+N')', N'')
+			       ELSE N''
+			       END) ELSE N'' END) AS [Datatype],
+	       (CASE WHEN obj.[type]='SO' THEN N'START WITH '+CAST(col.seed_value AS nvarchar(40))+
+                                           N' INCREMENT BY '+CAST(col.increment_value AS nvarchar(40))
+                 WHEN col.generated_always_type_desc=N'AS_ROW_START' THEN N'GENERATED ALWAYS AS ROW START'
+                 WHEN col.generated_always_type_desc=N'AS_ROW_END' THEN N'GENERATED ALWAYS AS ROW END'
+                 WHEN col.seed_value IS NOT NULL THEN ISNULL(N'IDENTITY('+CAST(col.seed_value AS nvarchar(40))+N', '+CAST(col.increment_value AS nvarchar(40))+N')', N'')
+	             WHEN col.default_name IS NOT NULL THEN (CASE WHEN col.default_is_system_named=0 THEN N'CONSTRAINT '+col.default_name+N' ' ELSE N'' END)+
+	                                                    (CASE WHEN col.default_name IS NOT NULL THEN ISNULL(N'DEFAULT '+col.[definition], N'') ELSE N'' END)
+                 ELSE N''
                  END)+
-           (CASE WHEN col.is_hidden=1 THEN ' HIDDEN'
-                 ELSE ''
+           (CASE WHEN col.is_hidden=1 THEN N' HIDDEN'
+                 ELSE N''
                  END) AS [Ident/default],
-	       ISNULL('COLLATE '+NULLIF(col.collation_name, CAST(DATABASEPROPERTYEX(DB_NAME(),'collation') AS varchar(255))), '') AS [Collation],
-	       (CASE WHEN obj.[type]='SO' THEN ''
-                 WHEN col.column_id IS NULL THEN ''
-	             WHEN col.is_sparse=1 THEN 'SPARSE NULL'
-		         WHEN col.is_nullable=1 THEN 'NULL'
-		         ELSE 'NOT NULL' END) AS [NULL],
+	       ISNULL(N'COLLATE '+NULLIF(col.collation_name, CAST(DATABASEPROPERTYEX(DB_NAME(), N'collation') AS nvarchar(255))), N'') AS [Collation],
+	       (CASE WHEN obj.[type]='SO' THEN N''
+                 WHEN col.column_id IS NULL THEN N''
+	             WHEN col.is_sparse=1 THEN N'SPARSE NULL'
+		         WHEN col.is_nullable=1 THEN N'NULL'
+		         ELSE N'NOT NULL' END) AS [NULL],
 	       ISNULL(NULLIF(SUBSTRING(
-		   (CASE WHEN (col.[type_name] LIKE '%char%' OR col.[type_name] LIKE '%bin%') AND col.is_ansi_padded=0 THEN '  /* ANSI_PADDING OFF */' ELSE '' END)+
-		   (CASE WHEN col.is_output=1 THEN ', OUTPUT' ELSE '' END)+
-		   (CASE WHEN col.is_readonly=1 THEN ', READONLY' ELSE '' END)+
-		   ISNULL('  /* '+col.tbl_type_cols+' */', ''),
-		   3, 8000), ''), '')+
-           (CASE WHEN obj.[type]='SO' THEN ISNULL(' '+[definition], '') ELSE '' END) AS [Options],
-		   (CASE WHEN obj.[type]='SO' THEN 'Current value '+CAST(col.current_value AS varchar(40))
-                 WHEN ROW_NUMBER() OVER (ORDER BY col.is_output, COALESCE(col.parameter_id, col.column_id+999))=COUNT(*) OVER (PARTITION BY (SELECT NULL)) THEN '' ELSE ',' END) AS [ ],
-           ISNULL(N'-- '+CAST(ep.[value] AS nvarchar(max)), '') AS [Description]
+		   (CASE WHEN (col.[type_name] LIKE N'%char%' OR col.[type_name] LIKE N'%bin%') AND col.is_ansi_padded=0 THEN N'  /* ANSI_PADDING OFF */' ELSE N'' END)+
+		   (CASE WHEN col.is_output=1 THEN N', OUTPUT' ELSE N'' END)+
+		   (CASE WHEN col.is_readonly=1 THEN N', READONLY' ELSE N'' END)+
+		   ISNULL(N'  /* '+col.tbl_type_cols+N' */', ''),
+		   3, 8000), N''), N'')+
+           (CASE WHEN obj.[type]='SO' THEN ISNULL(N' '+[definition], N'') ELSE N'' END) AS [Options],
+		   (CASE WHEN obj.[type]='SO' THEN N'Current value '+CAST(col.current_value AS nvarchar(40))
+                 WHEN ROW_NUMBER() OVER (ORDER BY col.is_output, COALESCE(col.parameter_id, col.column_id+999))=COUNT(*) OVER (PARTITION BY (SELECT NULL)) THEN N'' ELSE N',' END) AS [ ],
+           ISNULL(N'-- '+CAST(ep.[value] AS nvarchar(max)), N'') AS [Description]
 	FROM (SELECT column_id, CAST(NULL AS int) AS parameter_id, name, user_type_id, system_type_id,
-		     max_length, [precision], scale, is_sparse, is_nullable, collation_name,
-		     is_ansi_padded, xml_collection_id, default_object_id, CAST(NULL AS bit) AS is_output,
-             CAST(NULL AS bit) AS is_readonly, CAST(NULL AS bit) AS is_table_type,
-		     seed_value, increment_value, [definition], is_persisted, [type_name],
-		     default_name, default_is_system_named, CAST(NULL AS varchar(max)) AS tbl_type_cols,
-             current_value, generated_always_type_desc, is_hidden
+		         max_length, [precision], scale, is_sparse, is_nullable, collation_name,
+		         is_ansi_padded, xml_collection_id, default_object_id, CAST(NULL AS bit) AS is_output,
+                 CAST(NULL AS bit) AS is_readonly, CAST(NULL AS bit) AS is_table_type,
+		         seed_value, increment_value, [definition], is_persisted, [type_name],
+		         default_name, default_is_system_named, CAST(NULL AS varchar(max)) AS tbl_type_cols,
+                 current_value, generated_always_type_desc, is_hidden
 	      FROM @syscolumns
 	      WHERE [object_id]=@object_id
 	      UNION ALL
-	      SELECT CAST(NULL AS int) AS column_id, parameter_id, name, user_type_id, system_type_id,
-		     max_length, [precision], scale, NULL, is_nullable, NULL,
-		     NULL, xml_collection_id, NULL, is_output, is_readonly,
-             is_table_type, NULL, NULL, NULL, NULL, [type_name], NULL, NULL, tbl_type_cols,
-             NULL AS current_value, NULL AS generated_always_type_desc, NULL AS is_hidden
+	      SELECT CAST(NULL AS int) AS column_id, parameter_id, [name], user_type_id, system_type_id,
+		         max_length, [precision], scale, NULL, is_nullable, NULL,
+		         NULL, xml_collection_id, NULL, is_output, is_readonly,
+                 is_table_type, NULL, NULL, NULL, NULL, [type_name], NULL, NULL, tbl_type_cols,
+                 NULL AS current_value, NULL AS generated_always_type_desc, NULL AS is_hidden
 	      FROM @sysparameters
 	      ) AS col
 	LEFT JOIN @xmlschemacollections AS xsc ON col.xml_collection_id=xsc.xml_collection_id
     LEFT JOIN @extended_properties AS ep ON ep.[object_id]=@object_id AND ep.column_id=col.column_id AND ep.[name]=N'MS_Description'
 	LEFT JOIN @sysschemas AS xsc_sch ON xsc.[schema_id]=xsc_sch.[schema_id]
     LEFT JOIN @sysobjects AS obj ON obj.[object_id]=@object_id
---	ORDER BY col.is_output, COALESCE(col.parameter_id, col.column_id+999)
 
     UNION ALL
 
-    SELECT '', '', ', PERIOD FOR SYSTEM_TIME ('+
-        MAX((CASE WHEN generated_always_type_desc='AS_ROW_START' THEN [name] ELSE '' END))+', '+
-        MAX((CASE WHEN generated_always_type_desc='AS_ROW_END' THEN [name] ELSE '' END))+')', '', '', '', '', ''
+    SELECT N'', N'', N', PERIOD FOR SYSTEM_TIME ('+
+        MAX((CASE WHEN generated_always_type_desc='AS_ROW_START' THEN [name] ELSE N'' END))+N', '+
+        MAX((CASE WHEN generated_always_type_desc='AS_ROW_END' THEN [name] ELSE N'' END))+N')', N'', N'', N'', N'', N''
 	FROM @syscolumns
 	WHERE [object_id]=@object_id
-      AND generated_always_type_desc IN ('AS_ROW_START', 'AS_ROW_END')
+      AND generated_always_type_desc IN (N'AS_ROW_START', N'AS_ROW_END')
     HAVING COUNT(*)>0;
 END;
 
@@ -1023,16 +1004,16 @@ IF (@has_indexes=1)
 		       ROW_NUMBER() OVER (
 			   PARTITION BY ic.index_id, ic.is_included_column
 			   ORDER BY ic.key_ordinal) AS ordinal,
-		       (CASE WHEN c.[name] LIKE '[0-9]%' OR c.[name] LIKE '%[^0-9a-z\_@]%' ESCAPE '\' OR c.[name] IN (SELECT keyword FROM @reserved_keywords) THEN QUOTENAME(c.[name]) ELSE c.[name] END)+(CASE WHEN ic.is_descending_key=1 THEN ' DESC' ELSE '' END) AS [name],
-		       (CASE WHEN c.[name] LIKE '[0-9]%' OR c.[name] LIKE '%[^0-9a-z\_@]%' ESCAPE '\' OR c.[name] IN (SELECT keyword FROM @reserved_keywords) THEN QUOTENAME(c.[name]) ELSE c.[name] END) AS name_plain
+		       (CASE WHEN c.[name] LIKE N'[0-9]%' OR c.[name] LIKE N'%[^0-9a-z\_@]%' ESCAPE N'\' OR c.[name] IN (SELECT keyword FROM @reserved_keywords) THEN QUOTENAME(c.[name]) ELSE c.[name] END)+(CASE WHEN ic.is_descending_key=1 THEN N' DESC' ELSE N'' END) AS [name],
+		       (CASE WHEN c.[name] LIKE N'[0-9]%' OR c.[name] LIKE N'%[^0-9a-z\_@]%' ESCAPE N'\' OR c.[name] IN (SELECT keyword FROM @reserved_keywords) THEN QUOTENAME(c.[name]) ELSE c.[name] END) AS name_plain
 		FROM @sysindexcolumns AS ic
 		INNER JOIN @syscolumns AS c ON ic.[object_id]=c.[object_id] AND ic.column_id=c.column_id
 		WHERE ic.[object_id]=@object_id),
 
 	     rcte AS (
 		SELECT index_id, is_included_column, ordinal,
-               CAST([name] AS varchar(max)) AS list,
-               CAST(name_plain AS varchar(max)) AS list_plain
+               CAST([name] AS nvarchar(max)) AS list,
+               CAST(name_plain AS nvarchar(max)) AS list_plain
 		FROM ixc
 		WHERE ordinal=1
         
@@ -1041,8 +1022,8 @@ IF (@has_indexes=1)
 		SELECT rcte.index_id,
 		       rcte.is_included_column,
 		       ixc.ordinal,
-		       CAST(rcte.list+', '+ixc.[name] AS varchar(max)),
-		       CAST(rcte.list_plain+', '+ixc.name_plain AS varchar(max))
+		       CAST(rcte.list+N', '+ixc.[name] AS nvarchar(max)),
+		       CAST(rcte.list_plain+N', '+ixc.name_plain AS nvarchar(max))
 		FROM rcte
 		INNER JOIN ixc ON
 		    rcte.index_id=ixc.index_id AND
@@ -1052,56 +1033,56 @@ IF (@has_indexes=1)
     --- Partition compression
     part AS (
         SELECT [object_id], index_id, [group], data_compression_desc,
-               (CASE WHEN partition_count=COUNT(*) THEN 'ALL' ELSE CAST(MIN(partition_number) AS varchar(20))+ISNULL(' TO '+CAST(NULLIF(MAX(partition_number), MIN(partition_number)) AS varchar(20)), '') END) AS partition_list
+               (CASE WHEN partition_count=COUNT(*) THEN N'ALL' ELSE CAST(MIN(partition_number) AS varchar(20))+ISNULL(N' TO '+CAST(NULLIF(MAX(partition_number), MIN(partition_number)) AS varchar(20)), N'') END) AS partition_list
         FROM (
             SELECT [object_id], index_id, partition_number, data_compression_desc, partition_count, SUM(segment) OVER (PARTITION BY [object_id], index_id ORDER BY partition_number ROWS UNBOUNDED PRECEDING) AS [group]
             FROM (
                 SELECT [object_id], index_id, partition_number, data_compression_desc,
-                       (CASE WHEN LAG(data_compression_desc, 1, '') OVER (PARTITION BY [object_id], index_id ORDER BY partition_number)!=data_compression_desc THEN 1 ELSE 0 END) AS segment,
+                       (CASE WHEN LAG(data_compression_desc, 1, N'') OVER (PARTITION BY [object_id], index_id ORDER BY partition_number)!=data_compression_desc THEN 1 ELSE 0 END) AS segment,
                        COUNT(*) OVER () AS partition_count
                 FROM @syspartitions
                 WHERE [object_id]=@object_id
                 ) AS x
             WHERE partition_count>1
             ) AS x
-        WHERE data_compression_desc!='NONE'
+        WHERE data_compression_desc!=N'NONE'
         GROUP BY [object_id], index_id, [group], data_compression_desc, partition_count),
 
     part2 AS (
-        SELECT [object_id], index_id, 'DATA_COMPRESSION='+data_compression_desc+ISNULL(' ON PARTITIONS ('+
-               NULLIF(SUBSTRING(CAST((SELECT ', '+partition_list
+        SELECT [object_id], index_id, N'DATA_COMPRESSION='+data_compression_desc+ISNULL(N' ON PARTITIONS ('+
+               NULLIF(SUBSTRING(CAST((SELECT N', '+partition_list
                                       FROM part AS p2
                                       WHERE p2.[object_id]=p2.[object_id] AND p2.index_id=p1.index_id AND p2.data_compression_desc=p1.data_compression_desc
-                                      ORDER BY [group] FOR XML PATH(''), TYPE) AS varchar(max)), 3, 1000), 'ALL')+')', '') AS [definition]
+                                      ORDER BY [group] FOR XML PATH(''), TYPE) AS varchar(max)), 3, 1000), N'ALL')+N')', N'') AS [definition]
         FROM part AS p1
         GROUP BY [object_id], index_id, data_compression_desc)
 
-    SELECT (CASE WHEN ix.is_primary_key=0 AND ix.is_unique_constraint=0 AND ix.is_unique=1 THEN 'UNIQUE ' ELSE '' END)+
-           (CASE WHEN ix.is_primary_key=0 AND ix.is_unique_constraint=0 AND ix.[type]=1 THEN 'CLUSTERED ' ELSE '' END)+
-           (CASE WHEN ix.[type]>=3 THEN REPLACE(ix.[type_desc], 'NONCLUSTERED ', '')+' ' ELSE '' END)+
-           (CASE WHEN 1 IN (ix.is_primary_key, ix.is_unique_constraint) THEN 'CONSTRAINT' ELSE 'INDEX' END) AS [Type],
+    SELECT (CASE WHEN ix.is_primary_key=0 AND ix.is_unique_constraint=0 AND ix.is_unique=1 THEN N'UNIQUE ' ELSE N'' END)+
+           (CASE WHEN ix.is_primary_key=0 AND ix.is_unique_constraint=0 AND ix.[type]=1 THEN N'CLUSTERED ' ELSE N'' END)+
+           (CASE WHEN ix.[type]>=3 THEN REPLACE(ix.[type_desc], N'NONCLUSTERED ', N'')+' ' ELSE N'' END)+
+           (CASE WHEN 1 IN (ix.is_primary_key, ix.is_unique_constraint) THEN N'CONSTRAINT' ELSE N'INDEX' END) AS [Type],
            (CASE WHEN ix.is_system_named=0 THEN ix.[name] ELSE '' END) AS [Index/constraint name],
-           (CASE WHEN ix.is_primary_key=1 THEN 'PRIMARY KEY '+ix.[type_desc]
-    	     WHEN ix.is_unique_constraint=1 THEN 'UNIQUE CONSTRAINT '+ix.[type_desc]
-    	     ELSE '' END) AS [Constraint type],
-           ISNULL('('+(SELECT TOP 1 rcte.list FROM rcte WHERE rcte.index_id=ix.index_id AND (rcte.is_included_column=0 OR ix.[type]=6) ORDER BY rcte.ordinal DESC)+')', '') AS [Index columns],
-           ISNULL('INCLUDE ('+(SELECT TOP 1 rcte.list_plain FROM rcte WHERE rcte.index_id=ix.index_id AND rcte.is_included_column=1 AND ix.[type] IN (1, 2) ORDER BY rcte.ordinal DESC)+')', '') AS [Includes],
-           ISNULL(' WHERE '+ix.filter_definition COLLATE database_default, '') AS [Filter],
-	   ISNULL('WITH ('+NULLIF(SUBSTRING(
-	              ISNULL(', DATA_COMPRESSION='+NULLIF(NULLIF(p.data_compression_desc, 'NONE'), 'COLUMNSTORE'), '')+
-                  ISNULL(CAST((SELECT ', '+[definition] FROM part2 WHERE part2.[object_id]=ix.[object_id] AND part2.index_id=ix.index_id FOR XML PATH(''), TYPE) AS varchar(max)), '')+
-                  ISNULL(', COMPRESSION_DELAY='+CAST(ix.[compression_delay] AS varchar(10))+' MINUTES', '')+
+           (CASE WHEN ix.is_primary_key=1 THEN N'PRIMARY KEY '+ix.[type_desc]
+    	     WHEN ix.is_unique_constraint=1 THEN N'UNIQUE CONSTRAINT '+ix.[type_desc]
+    	     ELSE N'' END) AS [Constraint type],
+           ISNULL(N'('+(SELECT TOP 1 rcte.list FROM rcte WHERE rcte.index_id=ix.index_id AND (rcte.is_included_column=0 OR ix.[type]=6) ORDER BY rcte.ordinal DESC)+N')', N'') AS [Index columns],
+           ISNULL(N'INCLUDE ('+(SELECT TOP 1 rcte.list_plain FROM rcte WHERE rcte.index_id=ix.index_id AND rcte.is_included_column=1 AND ix.[type] IN (1, 2) ORDER BY rcte.ordinal DESC)+N')', N'') AS [Includes],
+           ISNULL(N' WHERE '+ix.filter_definition COLLATE database_default, N'') AS [Filter],
+	   ISNULL(N'WITH ('+NULLIF(SUBSTRING(
+	              ISNULL(', DATA_COMPRESSION='+NULLIF(NULLIF(p.data_compression_desc, N'NONE'), N'COLUMNSTORE'), N'')+
+                  ISNULL(CAST((SELECT N', '+[definition] FROM part2 WHERE part2.[object_id]=ix.[object_id] AND part2.index_id=ix.index_id FOR XML PATH(N''), TYPE) AS varchar(max)), N'')+
+                  ISNULL(N', COMPRESSION_DELAY='+CAST(ix.[compression_delay] AS varchar(10))+N' MINUTES', '')+
             (CASE WHEN ix.[type] IN (1, 2)
-	              THEN (CASE WHEN ix.fill_factor!=@default_fill_factor THEN ', FILLFACTOR='+ISNULL(NULLIF(CAST(ix.fill_factor AS varchar(max)), '0'), '100') ELSE '' END)+
-	                   ', ALLOW_ROW_LOCKS='+(CASE ix.[allow_row_locks] WHEN 1 THEN 'ON' ELSE 'OFF' END)+
-	                   ', ALLOW_PAGE_LOCKS='+(CASE ix.[allow_page_locks] WHEN 1 THEN 'ON' ELSE 'OFF' END)+
-	                   (CASE WHEN ix.fill_factor!=0 THEN ', PAD_INDEX='+(CASE ix.is_padded WHEN 1 THEN 'ON' ELSE 'OFF' END) ELSE '' END)
-                  ELSE '' END)+
-                  ISNULL(', BUCKET_COUNT='+CAST(ix.[bucket_count] AS varchar(10)), '')
-            , 3, 10000), '')+')', '') AS [Options],
-	   (CASE WHEN ix.index_id IS NOT NULL AND ds.is_default=0 THEN 'ON '+QUOTENAME(ds.[name])+ISNULL('('+c.[name]+')', '') ELSE '' END) AS [Data space],
-           (SELECT ISNULL(REPLACE(REPLACE(CONVERT(varchar(100), CAST(SUM(sub.[rows]) AS money), 1), ',', ' '), '.00', '')+
-	           ISNULL(' rows in '+CAST(NULLIF(COUNT(*), 1) AS varchar(10))+' partitions', ''), '')
+	              THEN (CASE WHEN ix.fill_factor!=@default_fill_factor THEN N', FILLFACTOR='+ISNULL(NULLIF(CAST(ix.fill_factor AS varchar(max)), N'0'), N'100') ELSE N'' END)+
+	                   N', ALLOW_ROW_LOCKS='+(CASE ix.[allow_row_locks] WHEN 1 THEN N'ON' ELSE N'OFF' END)+
+	                   N', ALLOW_PAGE_LOCKS='+(CASE ix.[allow_page_locks] WHEN 1 THEN N'ON' ELSE N'OFF' END)+
+	                   (CASE WHEN ix.fill_factor!=0 THEN N', PAD_INDEX='+(CASE ix.is_padded WHEN 1 THEN N'ON' ELSE N'OFF' END) ELSE N'' END)
+                  ELSE N'' END)+
+                  ISNULL(N', BUCKET_COUNT='+CAST(ix.[bucket_count] AS varchar(10)), N'')
+            , 3, 10000), N'')+N')', N'') AS [Options],
+	   (CASE WHEN ix.index_id IS NOT NULL AND ds.is_default=0 THEN N'ON '+QUOTENAME(ds.[name])+ISNULL(N'('+c.[name]+N')', '') ELSE N'' END) AS [Data space],
+           (SELECT ISNULL(REPLACE(REPLACE(CONVERT(nvarchar(100), CAST(SUM(sub.[rows]) AS money), 1), N',', N' '), N'.00', N'')+
+	           ISNULL(N' rows in '+CAST(NULLIF(COUNT(*), 1) AS varchar(10))+N' partitions', N''), N'')
             FROM @syspartitions AS sub
             WHERE sub.[object_id]=@object_id AND sub.index_id=ix.index_id AND ix.has_filter=1) AS [Filtered rows]
 	FROM @sysindexes AS ix
@@ -1124,8 +1105,8 @@ IF (@has_indexes=1)
 IF (@has_foreign_keys=1)
 	WITH cols AS (
 		SELECT fkc.constraint_object_id, fkc.constraint_column_id,
-		       CAST((CASE WHEN pc.[name] LIKE '[0-9]%' OR pc.[name] LIKE '%[^0-9a-z\_@]%' ESCAPE '\' OR pc.[name] IN (SELECT keyword FROM @reserved_keywords) THEN QUOTENAME(pc.[name]) ELSE pc.[name] END) AS varchar(max)) AS parent_cols,
-		       CAST((CASE WHEN rc.[name] LIKE '[0-9]%' OR rc.[name] LIKE '%[^0-9a-z\_@]%' ESCAPE '\' OR rc.[name] IN (SELECT keyword FROM @reserved_keywords) THEN QUOTENAME(rc.[name]) ELSE rc.[name] END) AS varchar(max)) AS referenced_cols
+		       CAST((CASE WHEN pc.[name] LIKE N'[0-9]%' OR pc.[name] LIKE N'%[^0-9a-z\_@]%' ESCAPE N'\' OR pc.[name] IN (SELECT keyword FROM @reserved_keywords) THEN QUOTENAME(pc.[name]) ELSE pc.[name] END) AS varchar(max)) AS parent_cols,
+		       CAST((CASE WHEN rc.[name] LIKE N'[0-9]%' OR rc.[name] LIKE N'%[^0-9a-z\_@]%' ESCAPE N'\' OR rc.[name] IN (SELECT keyword FROM @reserved_keywords) THEN QUOTENAME(rc.[name]) ELSE rc.[name] END) AS varchar(max)) AS referenced_cols
 		FROM @sysforeignkeycols AS fkc
 		INNER JOIN @syscolumns AS pc ON fkc.parent_object_id=pc.[object_id] AND fkc.parent_column_id=pc.column_id
 		INNER JOIN @syscolumns AS rc ON fkc.referenced_object_id=rc.[object_id] AND fkc.referenced_column_id=rc.column_id
@@ -1142,16 +1123,16 @@ IF (@has_foreign_keys=1)
 		INNER JOIN @syscolumns AS pc ON fkc.parent_object_id=pc.[object_id] AND fkc.parent_column_id=pc.column_id
 		INNER JOIN @syscolumns AS rc ON fkc.referenced_object_id=rc.[object_id] AND fkc.referenced_column_id=rc.column_id)
 
-	SELECT ps.[name]+'.'+p.[name] AS [Referencing object],
+	SELECT ps.[name]+N'.'+p.[name] AS [Referencing object],
 	       fk.[name] AS [Foreign key constraint],
-	       'FOREIGN KEY ('+(SELECT TOP 1 parent_cols FROM cols WHERE cols.constraint_object_id=fk.[object_id] ORDER BY cols.constraint_column_id DESC)+')' AS [Referencing columns],
-	       'REFERENCES '+rs.[name]+'.'+r.[name] AS [Referenced object],
-	       '('+(SELECT TOP 1 referenced_cols FROM cols WHERE cols.constraint_object_id=fk.[object_id] ORDER BY cols.constraint_column_id DESC)+')' AS [Referenced columns],
-	       SUBSTRING(ISNULL(' ON DELETE '+NULLIF(REPLACE(fk.delete_referential_action_desc, '_', ' '), 'NO ACTION'), '')+
-			 ISNULL(' ON UPDATE '+NULLIF(REPLACE(fk.update_referential_action_desc, '_', ' '), 'NO ACTION'), ''), 2, 100)+
-             (CASE WHEN 1 IN (fk.is_disabled, fk.is_not_trusted) THEN ' -- ' ELSE '' END)+
-             (CASE WHEN fk.is_disabled=1 THEN ' DISABLED'
-                   WHEN fk.is_not_trusted=1 THEN ' NOT TRUSTED' ELSE '' END) AS [Options]
+	       N'FOREIGN KEY ('+(SELECT TOP 1 parent_cols FROM cols WHERE cols.constraint_object_id=fk.[object_id] ORDER BY cols.constraint_column_id DESC)+N')' AS [Referencing columns],
+	       N'REFERENCES '+rs.[name]+'.'+r.[name] AS [Referenced object],
+	       N'('+(SELECT TOP 1 referenced_cols FROM cols WHERE cols.constraint_object_id=fk.[object_id] ORDER BY cols.constraint_column_id DESC)+N')' AS [Referenced columns],
+	       SUBSTRING(ISNULL(N' ON DELETE '+NULLIF(REPLACE(fk.delete_referential_action_desc, N'_', N' '), N'NO ACTION'), N'')+
+			 ISNULL(N' ON UPDATE '+NULLIF(REPLACE(fk.update_referential_action_desc, N'_', N' '), N'NO ACTION'), N''), 2, 100)+
+             (CASE WHEN 1 IN (fk.is_disabled, fk.is_not_trusted) THEN N' -- ' ELSE N'' END)+
+             (CASE WHEN fk.is_disabled=1 THEN N' DISABLED'
+                   WHEN fk.is_not_trusted=1 THEN N' NOT TRUSTED' ELSE N'' END) AS [Options]
 	FROM @sysforeignkeys AS fk
 	INNER JOIN @sysobjects AS p ON fk.parent_object_id=p.[object_id]
 	INNER JOIN @sysschemas AS ps ON p.[schema_id]=ps.[schema_id]
@@ -1166,9 +1147,9 @@ IF (@has_foreign_keys=1)
 
 --- Triggers: name, type and actions
 IF (EXISTS (SELECT NULL FROM @systriggers))
-    SELECT s.[name]+'.'+t.[name] AS [Trigger],
-           (CASE WHEN t.is_instead_of_trigger=1 THEN 'INSTEAD OF ' ELSE 'FOR ' END)+t.[trigger_events] AS [Trigger action(s)],
-           (CASE WHEN t.is_disabled=1 THEN 'Disabled' ELSE '' END) AS [ ]
+    SELECT s.[name]+N'.'+t.[name] AS [Trigger],
+           (CASE WHEN t.is_instead_of_trigger=1 THEN N'INSTEAD OF ' ELSE N'FOR ' END)+t.[trigger_events] AS [Trigger action(s)],
+           (CASE WHEN t.is_disabled=1 THEN N'Disabled' ELSE N'' END) AS [ ]
     FROM @systriggers AS t
     LEFT JOIN @sysobjects AS o ON t.[object_id]=o.[object_id]
     LEFT JOIN @sysschemas AS s ON o.[schema_id]=s.[schema_id]
@@ -1209,11 +1190,11 @@ IF (@has_references=1) BEGIN;
 		    WHERE fk.[object_id]=fkc.constraint_object_id) AS is_nullable
 	    FROM @sysforeignkeys AS fk
 	    CROSS APPLY (
-		SELECT CAST(fkc.parent_column_id AS varchar(4))+';'
+		SELECT CAST(fkc.parent_column_id AS varchar(4))+N';'
 		FROM @sysforeignkeycols AS fkc
 		WHERE fkc.constraint_object_id=fk.[object_id]
 		ORDER BY fkc.parent_column_id
-		FOR XML PATH(''), TYPE) AS c(list)
+		FOR XML PATH(N''), TYPE) AS c(list)
 	    WHERE fk.parent_object_id!=fk.referenced_object_id),
 
 	     uqix
@@ -1221,13 +1202,13 @@ IF (@has_references=1) BEGIN;
 	    SELECT DISTINCT ix.[object_id], CAST(c.list AS varchar(255)) AS column_list
 	    FROM @sysindexes AS ix
 	    CROSS APPLY (
-		SELECT CAST(ixc.column_id AS varchar(4))+';'
+		SELECT CAST(ixc.column_id AS varchar(4))+N';'
 		FROM @sysindexcolumns AS ixc
 		WHERE ixc.[object_id]=ix.[object_id] AND
 		      ixc.index_id=ix.index_id AND
 		      ixc.is_included_column=0
 		ORDER BY ixc.column_id
-		FOR XML PATH(''), TYPE) AS c(list)
+		FOR XML PATH(N''), TYPE) AS c(list)
 	    WHERE ix.is_unique=1),
 
 	     refs2
@@ -1235,9 +1216,9 @@ IF (@has_references=1) BEGIN;
 	    --- there's more than one reference between the two tables, or more than one unique
 	    --- index on the referencing table, make the result set distinct using GROUP BY.
 	    SELECT refs1.referencing_id AS parent_id,
-		   ps.[name]+'.'+p.[name] AS parent_name,
+		   ps.[name]+N'.'+p.[name] AS parent_name,
 		   refs1.referenced_id AS child_id,
-		   cs.[name]+'.'+c.[name] AS child_name,
+		   cs.[name]+N'.'+c.[name] AS child_name,
 		   CAST(MAX(refs1.is_schemabound) AS bit) AS is_schemabound,
 		   CAST(MAX(refs1.is_foreign_key) AS bit) AS is_foreign_key,
 		   CAST(MAX((CASE WHEN uqix.[object_id] IS NOT NULL THEN 1 ELSE 0 END)) AS bit) AS is_unique,
@@ -1275,7 +1256,7 @@ IF (@has_references=1) BEGIN;
 	--- "parents" contains the first and second-order parent levels (r2 and r1),
 	--- where "parents" are referencing objects and "children" are the referenced objects.
 	WITH [rowcount] AS (
-		SELECT [object_id], ' ('+CAST(SUM([rows]) AS varchar(10))+')' AS [rowcount]
+		SELECT [object_id], N' ('+CAST(SUM([rows]) AS nvarchar(10))+N')' AS [rowcount]
 		FROM @syspartitions
 		WHERE index_id IN (0, 1)
 		GROUP BY [object_id], index_id
@@ -1287,22 +1268,22 @@ IF (@has_references=1) BEGIN;
 		       ROW_NUMBER() OVER (ORDER BY r2.parent_name, r1.parent_name)-COUNT(*) OVER (PARTITION BY NULL)/2 AS ordinal,
         
 		       --- Level -2
-		       ISNULL(r1.parent_name+ISNULL(+c1.[rowcount], ''), '') AS obj2,
+		       ISNULL(r1.parent_name+ISNULL(+c1.[rowcount], N''), N'') AS obj2,
 		       r1.is_foreign_key AS fk2,
 		       r1.is_schemabound AS sb2,
 		       r1.is_unique AS uq2,
 		       r1.is_nullable AS n2,
 
 		       --- Spacer
-		       (CASE WHEN r1.parent_count=0 THEN ''
+		       (CASE WHEN r1.parent_count=0 THEN N''
 			     WHEN r1.parent_count=1 THEN @hyph
-			     WHEN r1.parent_row=1 THEN '\'
-			     WHEN r1.parent_row=r1.parent_count THEN '/'
+			     WHEN r1.parent_row=1 THEN N'\'
+			     WHEN r1.parent_row=r1.parent_count THEN N'/'
 			     WHEN r1.child_id IS NOT NULL THEN @pipe
-			     ELSE '' END) AS spacer,
+			     ELSE N'' END) AS spacer,
 
 		       --- Level -1
-		       (CASE WHEN r1.parent_row=r1.parent_count/2+1 OR r1.child_id IS NULL THEN r2.parent_name+ISNULL(+c2.[rowcount], '') ELSE '' END) AS obj1,
+		       (CASE WHEN r1.parent_row=r1.parent_count/2+1 OR r1.child_id IS NULL THEN r2.parent_name+ISNULL(+c2.[rowcount], N'') ELSE N'' END) AS obj1,
 		       r2.is_foreign_key AS fk1,
 		       r2.is_schemabound AS sb1,
 		       r2.is_unique AS uq1,
@@ -1319,22 +1300,22 @@ IF (@has_references=1) BEGIN;
 		       ROW_NUMBER() OVER (ORDER BY r3.child_name, r4.child_name)-COUNT(*) OVER (PARTITION BY NULL)/2 AS ordinal,
 
 		       --- Level +1
-		       (CASE WHEN r4.child_row=r4.child_count/2+1 OR r4.parent_id IS NULL THEN r3.child_name+ISNULL(+c3.[rowcount], '') ELSE '' END) AS obj1,
+		       (CASE WHEN r4.child_row=r4.child_count/2+1 OR r4.parent_id IS NULL THEN r3.child_name+ISNULL(+c3.[rowcount], N'') ELSE N'' END) AS obj1,
 		       r3.is_foreign_key AS fk1,
 		       r3.is_schemabound AS sb1,
 		       r3.is_unique AS uq1,
 		       r3.is_nullable AS n1,
 
 		       --- Spacer
-		       (CASE WHEN r4.child_count=0 THEN ''
+		       (CASE WHEN r4.child_count=0 THEN N''
 			     WHEN r4.child_count=1 THEN @hyph
-			     WHEN r4.child_row=1 THEN '/'
-			     WHEN r4.child_row=r4.child_count THEN '\'
-			     WHEN r4.parent_id IS NULL THEN ''
+			     WHEN r4.child_row=1 THEN N'/'
+			     WHEN r4.child_row=r4.child_count THEN N'\'
+			     WHEN r4.parent_id IS NULL THEN N''
 			     ELSE @pipe END) AS spacer,
 
 		       --- Level +2
-		       ISNULL(r4.child_name+ISNULL(+c4.[rowcount], ''), '') AS obj2,
+		       ISNULL(r4.child_name+ISNULL(+c4.[rowcount], N''), N'') AS obj2,
 		       r4.is_foreign_key AS fk2,
 		       r4.is_schemabound AS sb2,
 		       r4.is_unique AS uq2,
@@ -1349,50 +1330,50 @@ IF (@has_references=1) BEGIN;
 	SELECT --- Second-order parent and spacer:
 	       ISNULL(p.obj2, '') AS [Referencing...],
 
-	       (CASE WHEN p.obj2!='' AND p.fk2=1 AND p.n2=1 THEN @zero
-		     WHEN p.obj2!='' AND p.fk2=1 AND p.n2=0 THEN @one ELSE N'' END)+
-	       (CASE WHEN p.obj2!='' AND p.fk2=1 AND p.uq2=0 THEN @inf ELSE N'' END)+
-	       (CASE WHEN p.obj2!='' AND p.fk2=1 THEN @hyph+@one
-		     WHEN p.sb2=1 THEN N'*' ELSE N'' END) AS [ ],
-	       ISNULL(p.spacer, '') AS [ ],
+	       (CASE WHEN p.obj2!=N'' AND p.fk2=1 AND p.n2=1 THEN @zero
+		         WHEN p.obj2!=N'' AND p.fk2=1 AND p.n2=0 THEN @one ELSE N'' END)+
+	       (CASE WHEN p.obj2!=N'' AND p.fk2=1 AND p.uq2=0 THEN @inf ELSE N'' END)+
+	       (CASE WHEN p.obj2!=N'' AND p.fk2=1 THEN @hyph+@one
+		         WHEN p.sb2=1 THEN N'*' ELSE N'' END) AS [ ],
+	       ISNULL(p.spacer, N'') AS [ ],
 
 	       --- First-order parent and spacer:
-	       ISNULL(p.obj1, '') AS [ ],
-	       (CASE WHEN p.obj1!='' AND p.fk1=1 AND p.n1=1 THEN @zero
-		     WHEN p.obj1!='' AND p.fk1=1 AND p.n1=0 THEN @one ELSE N'' END)+
-	       (CASE WHEN p.obj1!='' AND p.fk1=1 AND p.uq1=0 THEN @inf ELSE N'' END)+
-	       (CASE WHEN p.obj1!='' AND p.fk1=1 THEN @hyph+@one
-		     WHEN p.sb1=1 THEN N'*' ELSE N'' END) AS [ ],
+	       ISNULL(p.obj1, N'') AS [ ],
+	       (CASE WHEN p.obj1!=N'' AND p.fk1=1 AND p.n1=1 THEN @zero
+		         WHEN p.obj1!=N'' AND p.fk1=1 AND p.n1=0 THEN @one ELSE N'' END)+
+	       (CASE WHEN p.obj1!=N'' AND p.fk1=1 AND p.uq1=0 THEN @inf ELSE N'' END)+
+	       (CASE WHEN p.obj1!=N'' AND p.fk1=1 THEN @hyph+@one
+		         WHEN p.sb1=1 THEN N'*' ELSE N'' END) AS [ ],
 	       (CASE WHEN COUNT(p.ordinal) OVER(PARTITION BY NULL)=1 AND p.ordinal=MIN(p.ordinal) OVER (PARTITION BY NULL) THEN @hyph
-		     WHEN p.ordinal=MIN(p.ordinal) OVER (PARTITION BY NULL) THEN '\'
-		     WHEN p.ordinal=MAX(p.ordinal) OVER (PARTITION BY NULL) THEN '/'
-		     WHEN p.ordinal IS NOT NULL THEN @pipe ELSE '' END) AS [ ],
+		         WHEN p.ordinal=MIN(p.ordinal) OVER (PARTITION BY NULL) THEN N'\'
+		         WHEN p.ordinal=MAX(p.ordinal) OVER (PARTITION BY NULL) THEN N'/'
+		         WHEN p.ordinal IS NOT NULL THEN @pipe ELSE N'' END) AS [ ],
 
 	       --- The object itself:
-	       (CASE WHEN n.ordinal=1 THEN sch.[name]+'.'+obj.[name]+ISNULL(rc.[rowcount], '') ELSE '' END) AS [Object],
+	       (CASE WHEN n.ordinal=1 THEN sch.[name]+N'.'+obj.[name]+ISNULL(rc.[rowcount], N'') ELSE N'' END) AS [Object],
 
 	       --- First-order spacer and child:
 	       (CASE WHEN COUNT(c.ordinal) OVER(PARTITION BY NULL)=1 AND c.ordinal=MIN(c.ordinal) OVER (PARTITION BY NULL) THEN @hyph
-		     WHEN c.ordinal=MIN(c.ordinal) OVER (PARTITION BY NULL) THEN '/'
-		     WHEN c.ordinal=MAX(c.ordinal) OVER (PARTITION BY NULL) THEN '\'
-		     WHEN c.ordinal IS NOT NULL THEN @pipe ELSE '' END) AS [ ],
-	       (CASE WHEN c.obj1!='' AND c.fk1=1 AND c.n1=1 THEN @zero
-		     WHEN c.obj1!='' AND c.fk1=1 AND c.n1=0 THEN @one ELSE N'' END)+
-	       (CASE WHEN c.obj1!='' AND c.fk1=1 AND c.uq1=0 THEN @inf ELSE N'' END)+
-	       (CASE WHEN c.obj1!='' AND c.fk1=1 THEN @hyph+@one
-		     WHEN c.sb1=1 THEN N'*' ELSE N'' END) AS [ ],
+		         WHEN c.ordinal=MIN(c.ordinal) OVER (PARTITION BY NULL) THEN N'/'
+		         WHEN c.ordinal=MAX(c.ordinal) OVER (PARTITION BY NULL) THEN N'\'
+		         WHEN c.ordinal IS NOT NULL THEN @pipe ELSE '' END) AS [ ],
+	       (CASE WHEN c.obj1!=N'' AND c.fk1=1 AND c.n1=1 THEN @zero
+		         WHEN c.obj1!=N'' AND c.fk1=1 AND c.n1=0 THEN @one ELSE N'' END)+
+	       (CASE WHEN c.obj1!=N'' AND c.fk1=1 AND c.uq1=0 THEN @inf ELSE N'' END)+
+	       (CASE WHEN c.obj1!=N'' AND c.fk1=1 THEN @hyph+@one
+		         WHEN c.sb1=1 THEN N'*' ELSE N'' END) AS [ ],
 
 	       ISNULL(c.obj1, '') AS [ ],
 
 	       --- Second-order spacer and child:
-	       ISNULL(c.spacer, '') AS [ ],
-	       (CASE WHEN c.obj2!='' AND c.fk2=1 AND c.n2=1 THEN @zero
-		     WHEN c.obj2!='' AND c.fk2=1 AND c.n2=0 THEN @one ELSE N'' END)+
-	       (CASE WHEN c.obj2!='' AND c.fk2=1 AND c.uq2=0 THEN @inf ELSE N'' END)+
-	       (CASE WHEN c.obj2!='' AND c.fk2=1 THEN @hyph+@one
-		     WHEN c.sb2=1 THEN N'*' ELSE N'' END) AS [ ],
+	       ISNULL(c.spacer, N'') AS [ ],
+	       (CASE WHEN c.obj2!=N'' AND c.fk2=1 AND c.n2=1 THEN @zero
+		         WHEN c.obj2!=N'' AND c.fk2=1 AND c.n2=0 THEN @one ELSE N'' END)+
+	       (CASE WHEN c.obj2!=N'' AND c.fk2=1 AND c.uq2=0 THEN @inf ELSE N'' END)+
+	       (CASE WHEN c.obj2!=N'' AND c.fk2=1 THEN @hyph+@one
+		         WHEN c.sb2=1 THEN N'*' ELSE N'' END) AS [ ],
 
-	       ISNULL(c.obj2, '') AS [... referenced]
+	       ISNULL(c.obj2, N'') AS [... referenced]
 	FROM (--- This is a list of all ordinals, used as a "frame" for the
 	      --- recordset, to which we join "parents" and "children":
 	      SELECT ordinal FROM parents UNION
@@ -1416,16 +1397,16 @@ END;
 IF (@has_permissions=1)
 	WITH list AS (
 		SELECT p.class, (CASE p.class
-		        WHEN 1 THEN s.[name]+'.'+o.[name]
-			WHEN 3 THEN 'SCHEMA::'+s.[name]
-			WHEN 0 THEN 'DATABASE::'+DB_NAME() END) AS securable,
+		        WHEN 1 THEN s.[name]+N'.'+o.[name]
+			WHEN 3 THEN N'SCHEMA::'+s.[name]
+			WHEN 0 THEN N'DATABASE::'+DB_NAME() END) AS securable,
 		       ROW_NUMBER() OVER (
 			   PARTITION BY p.class, p.major_id, p.grantee_principal_id, p.grantor_principal_id, p.[state]
 			   ORDER BY p.[permission_name], p.minor_id) AS ordinal,
 		       p.grantee_principal_id,
 		       p.grantor_principal_id,
 		       p.[state],
-		       p.[permission_name] COLLATE database_default+ISNULL('('+c.[name]+')', '') AS [permission_name]
+		       p.[permission_name] COLLATE database_default+ISNULL(N'('+c.[name]+N')', N'') AS [permission_name]
 		FROM @sysdatabasepermissions AS p
 		INNER JOIN @sysobjects AS o ON o.[object_id]=@object_id
 		INNER JOIN @sysschemas AS s ON o.[schema_id]=s.[schema_id]
@@ -1433,16 +1414,16 @@ IF (@has_permissions=1)
 		WHERE (p.class=1 AND p.major_id=o.[object_id] OR
 		       p.class=3 AND p.major_id=o.[schema_id] OR
 		       p.class=0) AND
-		      p.[type] IN (SELECT [type] COLLATE database_default FROM sys.fn_builtin_permissions('OBJECT'))),
+		       p.[type] IN (SELECT [type] COLLATE database_default FROM sys.fn_builtin_permissions(N'OBJECT'))),
 
-	     rcte AS (
-		SELECT class, securable, ordinal, grantee_principal_id, grantor_principal_id, [state], CAST([permission_name] AS varchar(max)) AS list
+	rcte AS (
+		SELECT class, securable, ordinal, grantee_principal_id, grantor_principal_id, [state], CAST([permission_name] AS nvarchar(max)) AS list
 		FROM list
 		WHERE ordinal=1
 
 		UNION ALL
 
-		SELECT list.class, list.securable, list.ordinal, rcte.grantee_principal_id, rcte.grantor_principal_id, rcte.[state], CAST(rcte.list+', '+list.[permission_name] AS varchar(max))
+		SELECT list.class, list.securable, list.ordinal, rcte.grantee_principal_id, rcte.grantor_principal_id, rcte.[state], CAST(rcte.list+N', '+list.[permission_name] AS nvarchar(max))
 		FROM rcte
 		INNER JOIN list ON
 		    list.securable=rcte.securable AND
@@ -1451,17 +1432,16 @@ IF (@has_permissions=1)
 		    list.[state]=rcte.[state] AND
 		    list.ordinal=rcte.ordinal+1)
 
-	SELECT (CASE p.[state]
-		WHEN 'D' THEN 'DENY'
-		WHEN 'G' THEN 'GRANT'
-		WHEN 'W' THEN 'GRANT' END) AS [Grant/Deny],
-	       (CASE WHEN obj.[type]='FN' AND px.list='EXECUTE, REFERENCES' THEN 'ALL'
-		     WHEN obj.[type] IN ('IF', 'TF', 'U', 'V') AND px.list='DELETE, INSERT, REFERENCES, SELECT, UPDATE' THEN 'ALL'
-		     ELSE px.list END) AS [Permission],
-	       'ON '+p.securable AS [Object],
-	       'TO '+QUOTENAME(grantee.[name]) AS [Principal],
-	       LTRIM((CASE WHEN p.[state]='W' THEN ' WITH GRANT OPTION' ELSE '' END)+
-		     (CASE WHEN grantor.[name]!='dbo' THEN ' AS '+QUOTENAME(grantor.[name]) ELSE '' END)) AS [Options]
+	SELECT (CASE p.[state] WHEN 'D' THEN N'DENY'
+		                   WHEN 'G' THEN N'GRANT'
+		                   WHEN 'W' THEN N'GRANT' END) AS [Grant/Deny],
+	       (CASE WHEN obj.[type]='FN' AND px.list=N'EXECUTE, REFERENCES' THEN N'ALL'
+		         WHEN obj.[type] IN ('IF', 'TF', 'U', 'V') AND px.list=N'DELETE, INSERT, REFERENCES, SELECT, UPDATE' THEN N'ALL'
+		         ELSE px.list END) AS [Permission],
+	       N'ON '+p.securable AS [Object],
+	       N'TO '+QUOTENAME(grantee.[name]) AS [Principal],
+	       LTRIM((CASE WHEN p.[state]='W' THEN N' WITH GRANT OPTION' ELSE N'' END)+
+		         (CASE WHEN grantor.[name]!=N'dbo' THEN N' AS '+QUOTENAME(grantor.[name]) ELSE N'' END)) AS [Options]
 	FROM rcte AS p
 	INNER JOIN @sysobjects AS obj ON obj.[object_id]=@object_id
 	INNER JOIN @sysschemas AS sch ON obj.[schema_id]=sch.[schema_id]
@@ -1477,9 +1457,9 @@ IF (@has_permissions=1)
 
     UNION ALL
 
-    SELECT 'ADD SIGNATURE' AS [Grant/Deny], '' AS [Permission],
+    SELECT N'ADD SIGNATURE' AS [Grant/Deny], N'' AS [Permission],
            N'TO '+sch.[name]+N'.'+obj.[name] AS [Object],
-           '' AS [Principal],
+           N'' AS [Principal],
            N'BY '+sig.[name]+ISNULL(N' WITH '+sig.encryption_type_desc, N'')+';' AS [Options]
     FROM @signatures AS sig
     INNER JOIN @sysobjects AS obj ON sig.major_id=obj.[object_id] AND sig.[type_desc]=obj.[type_desc]
@@ -1489,7 +1469,7 @@ IF (@has_permissions=1)
 
 
 IF (@has_data=1 AND @rowcount>0)
-	SELECT ISNULL(ix.[name], '') AS [Index/heap],
+	SELECT ISNULL(ix.[name], N'') AS [Index/heap],
 /*
 	       --- Partition number, if there are partitions:
 	       (CASE COUNT(*) OVER (PARTITION BY p.[object_id], p.index_id)
@@ -1511,18 +1491,18 @@ IF (@has_data=1 AND @rowcount>0)
                  ELSE pc.[name]+N'='+ISNULL(p.boundary, N'NULL') END) AS [Partition],
 
 	       --- Storage properties:
-	       ISNULL(NULLIF(NULLIF(p.data_compression_desc, 'NONE'), 'COLUMNSTORE'), '') AS [Compression],
-	       ds.[name]+ISNULL('('+pc.[name]+')', '') AS [Data space],
-	       (CASE WHEN ix.[type_desc]!='HEAP' THEN STR(ISNULL(NULLIF(ix.fill_factor, 0), 100), 4, 0)+'%' ELSE '' END) AS [Fill factor],
+	       ISNULL(NULLIF(NULLIF(p.data_compression_desc, N'NONE'), N'COLUMNSTORE'), N'') AS [Compression],
+	       ds.[name]+ISNULL('('+pc.[name]+N')', N'') AS [Data space],
+	       (CASE WHEN ix.[type_desc]!=N'HEAP' THEN STR(ISNULL(NULLIF(ix.fill_factor, 0), 100), 4, 0)+'%' ELSE '' END) AS [Fill factor],
 
 	       --- The raw numbers:
 	       REPLACE(REPLACE(CONVERT(varchar(100), CAST(ISNULL(ps.row_count, p.[rows]) AS money), 1), ',', ' '), '.00', '') AS [Row count],
-	       (CASE WHEN ps.[partition_id] IS NULL THEN '(denied)' ELSE '' END)+ISNULL(STR(NULLIF(1.0*ps.reserved_page_count*8/1024, 0), 12, 2)+' MB', '') AS [Reserved],
-	       (CASE WHEN ps.[partition_id] IS NULL THEN '(denied)' ELSE '' END)+ISNULL(STR(NULLIF(1.0*ps.in_row_used_page_count*8/1024, 0), 12, 2)+' MB', '') AS [In-row used],
-	       (CASE WHEN ps.[partition_id] IS NULL THEN '(denied)' ELSE '' END)+ISNULL(STR(NULLIF(1.0*ps.row_overflow_used_page_count*8/1024, 0), 12, 2)+' MB', '') AS [Row-overflow used],
-	       (CASE WHEN ps.[partition_id] IS NULL THEN '(denied)' ELSE '' END)+ISNULL(STR(NULLIF(1.0*ps.lob_used_page_count*8/1024, 0), 12, 2)+' MB', '') AS [Out-of-row used],
-	       (CASE WHEN ps.[partition_id] IS NULL THEN '(denied)' ELSE '' END)+ISNULL(STR(NULLIF(1.0*ps.used_page_count*8/1024, 0), 12, 2)+' MB', '') AS [Total used],
-	       (CASE WHEN ps.[partition_id] IS NULL THEN '(denied)' ELSE '' END)+ISNULL(STR(NULLIF(1.0*ps.used_page_count*8*1024/NULLIF(ISNULL(ps.row_count, p.[rows]), 0), 0), 12, 1)+' B', '') AS [Avg. row size],
+	       (CASE WHEN ps.[partition_id] IS NULL THEN 'n/a' ELSE '' END)+ISNULL(STR(NULLIF(1.0*ps.reserved_page_count*8/1024, 0), 12, 2)+' MB', '') AS [Reserved],
+	       (CASE WHEN ps.[partition_id] IS NULL THEN 'n/a' ELSE '' END)+ISNULL(STR(NULLIF(1.0*ps.in_row_used_page_count*8/1024, 0), 12, 2)+' MB', '') AS [In-row used],
+	       (CASE WHEN ps.[partition_id] IS NULL THEN 'n/a' ELSE '' END)+ISNULL(STR(NULLIF(1.0*ps.row_overflow_used_page_count*8/1024, 0), 12, 2)+' MB', '') AS [Row-overflow used],
+	       (CASE WHEN ps.[partition_id] IS NULL THEN 'n/a' ELSE '' END)+ISNULL(STR(NULLIF(1.0*ps.lob_used_page_count*8/1024, 0), 12, 2)+' MB', '') AS [Out-of-row used],
+	       (CASE WHEN ps.[partition_id] IS NULL THEN 'n/a' ELSE '' END)+ISNULL(STR(NULLIF(1.0*ps.used_page_count*8/1024, 0), 12, 2)+' MB', '') AS [Total used],
+	       (CASE WHEN ps.[partition_id] IS NULL THEN 'n/a' ELSE '' END)+ISNULL(STR(NULLIF(1.0*ps.used_page_count*8*1024/NULLIF(ISNULL(ps.row_count, p.[rows]), 0), 0), 12, 1)+' B', '') AS [Avg. row size],
            ISNULL(STR(NULLIF(1.0*cs1.size_in_bytes/1024/1024, 0), 12, 2)+' MB', '') AS [CS open],
            ISNULL(STR(NULLIF(1.0*cs2.size_in_bytes/1024/1024, 0), 12, 2)+' MB', '') AS [CS closed],
            ISNULL(STR(NULLIF(1.0*cs3.size_in_bytes/1024/1024, 0), 12, 2)+' MB', '') AS [CS compressed]
@@ -1546,22 +1526,22 @@ IF (@has_data=1 AND @rowcount>0)
 
 IF (@has_sql_module=1) BEGIN;
     WITH r AS (
-        SELECT -3 AS [row], CAST('SET '+NULLIF(SUBSTRING(
-                    (CASE WHEN @uses_ansi_nulls=1 THEN ', ANSI_NULLS' ELSE '' END)+
-                    (CASE WHEN @uses_quoted_identifier=1 THEN ', QUOTED_IDENTIFIER' ELSE '' END), 3, 1000), '')+
-	            ' ON;' AS nvarchar(max)) AS rowData,
+        SELECT -3 AS [row], CAST(N'SET '+NULLIF(SUBSTRING(
+                    (CASE WHEN @uses_ansi_nulls=1 THEN N', ANSI_NULLS' ELSE N'' END)+
+                    (CASE WHEN @uses_quoted_identifier=1 THEN N', QUOTED_IDENTIFIER' ELSE N'' END), 3, 1000), '')+
+	            N' ON;' AS nvarchar(max)) AS rowData,
             CAST(NULL AS nvarchar(max)) AS remain
         UNION ALL
         SELECT -3 AS [row], CAST('SET '+NULLIF(SUBSTRING(
-                    (CASE WHEN @uses_ansi_nulls=0 THEN ', ANSI_NULLS' ELSE '' END)+
-                    (CASE WHEN @uses_quoted_identifier=0 THEN ', QUOTED_IDENTIFIER' ELSE '' END), 3, 1000), '')+
-	            ' OFF;' AS nvarchar(max)) AS rowData,
+                    (CASE WHEN @uses_ansi_nulls=0 THEN N', ANSI_NULLS' ELSE '' END)+
+                    (CASE WHEN @uses_quoted_identifier=0 THEN N', QUOTED_IDENTIFIER' ELSE N'' END), 3, 1000), '')+
+	            N' OFF;' AS nvarchar(max)) AS rowData,
 	        CAST(NULL AS nvarchar(max)) AS remain
         UNION ALL
 
-        SELECT -2 AS [row], CAST('GO' AS nvarchar(max)), CAST(NULL AS nvarchar(max))
+        SELECT -2 AS [row], CAST(N'GO' AS nvarchar(max)), CAST(NULL AS nvarchar(max))
         UNION ALL
-        SELECT -1 AS [row], CAST('' AS nvarchar(max)), CAST(NULL AS nvarchar(max))
+        SELECT -1 AS [row], CAST(N'' AS nvarchar(max)), CAST(NULL AS nvarchar(max))
         UNION ALL
 
         SELECT 0 AS [row], CAST(NULL AS nvarchar(max)) AS rowData, @module_definition AS remain
@@ -1569,14 +1549,14 @@ IF (@has_sql_module=1) BEGIN;
 	    SELECT [row]+1, LEFT(remain, CHARINDEX(@lf, remain+@lf)-1),
 	           SUBSTRING(remain, CHARINDEX(@lf, remain+@lf)+1, LEN(remain))
 	    FROM r
-	    WHERE NULLIF(remain, '') IS NOT NULL AND [row]<32)
+	    WHERE NULLIF(remain, N'') IS NOT NULL AND [row]<32)
 
-    SELECT (CASE WHEN [row]<0 THEN '' ELSE STR([row], 4, 0) END) AS Line,
+    SELECT (CASE WHEN [row]<0 THEN N'' ELSE STR([row], 4, 0) END) AS Line,
            REPLACE(rowData, @cr, N'') AS [Source code]
     FROM r
-    WHERE [row]>=(SELECT MIN([row]) FROM r WHERE [row]>0 AND REPLACE(rowData, @cr, N'')!='') AND [row]<32 OR [row]<0 AND rowData IS NOT NULL
+    WHERE [row]>=(SELECT MIN([row]) FROM r WHERE [row]>0 AND REPLACE(rowData, @cr, N'')!=N'') AND [row]<32 OR [row]<0 AND rowData IS NOT NULL
     UNION ALL
-    SELECT TOP 1 ' ...' AS [row], N''
+    SELECT TOP 1 N' ...' AS [row], N''
     FROM r
     WHERE [row]>=15
     ORDER BY 1
@@ -1648,7 +1628,7 @@ GO
 --- NOTE: sp_MS_marksystemobject is an undocumented, unsupported
 ---       feature of SQL Server.
 
-IF (DB_NAME()='master' AND CAST(SERVERPROPERTY('Edition') AS varchar(100)) NOT LIKE '%Azure%')
+IF (DB_NAME()=N'master' AND CAST(SERVERPROPERTY(N'Edition') AS varchar(100)) NOT LIKE N'%Azure%')
 	EXECUTE sys.sp_MS_marksystemobject @objname=N'sp_ctrl3';
 GO
 
@@ -1656,50 +1636,50 @@ GO
 --- for these properties are collected from the code comment in the
 --- installation script.
 ---
-DECLARE @object_id int=OBJECT_ID('dbo.sp_ctrl3'), @src nvarchar(max), @val nvarchar(4000);
+DECLARE @object_id int=OBJECT_ID(N'dbo.sp_ctrl3'), @src nvarchar(max), @val nvarchar(4000);
 SELECT @src=[definition] FROM sys.sql_modules WHERE [object_id]=@object_id;
 
 BEGIN TRANSACTION;
 
-    IF (EXISTS (SELECT NULL FROM sys.extended_properties WHERE major_id=@object_id AND [name]='Disclaimer'))
-        EXECUTE sys.sp_dropextendedproperty @name='Disclaimer', @level0type='SCHEMA', @level0name='dbo', @level1type='PROCEDURE', @level1name='sp_ctrl3';
+    IF (EXISTS (SELECT NULL FROM sys.extended_properties WHERE major_id=@object_id AND [name]=N'Disclaimer'))
+        EXECUTE sys.sp_dropextendedproperty @name=N'Disclaimer', @level0type=N'SCHEMA', @level0name=N'dbo', @level1type=N'PROCEDURE', @level1name=N'sp_ctrl3';
 
-    IF (EXISTS (SELECT NULL FROM sys.extended_properties WHERE major_id=@object_id AND [name]='Usage'))
-        EXECUTE sys.sp_dropextendedproperty @name='Usage', @level0type='SCHEMA', @level0name='dbo', @level1type='PROCEDURE', @level1name='sp_ctrl3';
+    IF (EXISTS (SELECT NULL FROM sys.extended_properties WHERE major_id=@object_id AND [name]=N'Usage'))
+        EXECUTE sys.sp_dropextendedproperty @name=N'Usage', @level0type=N'SCHEMA', @level0name=N'dbo', @level1type=N'PROCEDURE', @level1name=N'sp_ctrl3';
 
-    IF (EXISTS (SELECT NULL FROM sys.extended_properties WHERE major_id=@object_id AND [name]='Shortcut'))
-        EXECUTE sys.sp_dropextendedproperty @name='Shortcut', @level0type='SCHEMA', @level0name='dbo', @level1type='PROCEDURE', @level1name='sp_ctrl3';
+    IF (EXISTS (SELECT NULL FROM sys.extended_properties WHERE major_id=@object_id AND [name]=N'Shortcut'))
+        EXECUTE sys.sp_dropextendedproperty @name=N'Shortcut', @level0type=N'SCHEMA', @level0name=N'dbo', @level1type=N'PROCEDURE', @level1name=N'sp_ctrl3';
 
-    IF (EXISTS (SELECT NULL FROM sys.extended_properties WHERE major_id=@object_id AND [name]='Version'))
-        EXECUTE sys.sp_dropextendedproperty @name='Version', @level0type='SCHEMA', @level0name='dbo', @level1type='PROCEDURE', @level1name='sp_ctrl3';
+    IF (EXISTS (SELECT NULL FROM sys.extended_properties WHERE major_id=@object_id AND [name]=N'Version'))
+        EXECUTE sys.sp_dropextendedproperty @name=N'Version', @level0type=N'SCHEMA', @level0name=N'dbo', @level1type=N'PROCEDURE', @level1name=N'sp_ctrl3';
 
     -- DISCLAIMER:
     SET @src=SUBSTRING(@src, CHARINDEX(N'DISCLAIMER: ', @src)+12, LEN(@src));
     SELECT @val=LTRIM(RTRIM(REPLACE(LEFT(@src, CHARINDEX(NCHAR(13)+NCHAR(10)+NCHAR(13)+NCHAR(10), @src)-1), NCHAR(13)+NCHAR(10), N' ')));
     WHILE (@val LIKE N'%  %') SET @val=REPLACE(@val, N'  ', N' ');
 
-    EXECUTE sys.sp_addextendedproperty @name='Disclaimer', @value=@val, @level0type='SCHEMA', @level0name='dbo', @level1type='PROCEDURE', @level1name='sp_ctrl3';
+    EXECUTE sys.sp_addextendedproperty @name=N'Disclaimer', @value=@val, @level0type=N'SCHEMA', @level0name=N'dbo', @level1type=N'PROCEDURE', @level1name=N'sp_ctrl3';
 
     -- USAGE:
     SET @src=SUBSTRING(@src, CHARINDEX(N'USAGE: ', @src)+12, LEN(@src));
     SELECT @val=LTRIM(RTRIM(REPLACE(LEFT(@src, CHARINDEX(NCHAR(13)+NCHAR(10)+NCHAR(13)+NCHAR(10), @src)-1), NCHAR(13)+NCHAR(10), N' ')));
     WHILE (@val LIKE N'%  %') SET @val=REPLACE(@val, N'  ', N' ');
 
-    EXECUTE sys.sp_addextendedproperty @name='Usage', @value=@val, @level0type='SCHEMA', @level0name='dbo', @level1type='PROCEDURE', @level1name='sp_ctrl3';
+    EXECUTE sys.sp_addextendedproperty @name=N'Usage', @value=@val, @level0type=N'SCHEMA', @level0name=N'dbo', @level1type=N'PROCEDURE', @level1name=N'sp_ctrl3';
 
     -- SHORTCUT:
     SET @src=SUBSTRING(@src, CHARINDEX(N'SHORTCUT: ', @src)+12, LEN(@src));
     SELECT @val=LTRIM(RTRIM(REPLACE(LEFT(@src, CHARINDEX(NCHAR(13)+NCHAR(10)+NCHAR(13)+NCHAR(10), @src)-1), NCHAR(13)+NCHAR(10), N' ')));
     WHILE (@val LIKE N'%  %') SET @val=REPLACE(@val, N'  ', N' ');
 
-    EXECUTE sys.sp_addextendedproperty @name='Shortcut', @value=@val, @level0type='SCHEMA', @level0name='dbo', @level1type='PROCEDURE', @level1name='sp_ctrl3';
+    EXECUTE sys.sp_addextendedproperty @name=N'Shortcut', @value=@val, @level0type=N'SCHEMA', @level0name=N'dbo', @level1type=N'PROCEDURE', @level1name=N'sp_ctrl3';
 
     -- VERSION:
     SET @src=SUBSTRING(@src, CHARINDEX(N'VERSION: ', @src)+12, LEN(@src));
     SELECT @val=LTRIM(RTRIM(REPLACE(LEFT(@src, CHARINDEX(NCHAR(13)+NCHAR(10)+NCHAR(13)+NCHAR(10), @src)-1), NCHAR(13)+NCHAR(10), N' ')));
     WHILE (@val LIKE N'%  %') SET @val=REPLACE(@val, N'  ', N' ');
 
-    EXECUTE sys.sp_addextendedproperty @name='Version', @value=@val, @level0type='SCHEMA', @level0name='dbo', @level1type='PROCEDURE', @level1name='sp_ctrl3';
+    EXECUTE sys.sp_addextendedproperty @name=N'Version', @value=@val, @level0type=N'SCHEMA', @level0name=N'dbo', @level1type=N'PROCEDURE', @level1name=N'sp_ctrl3';
 
 COMMIT TRANSACTION;
 GO
