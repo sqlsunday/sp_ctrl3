@@ -36,7 +36,7 @@ SHORTCUT:   In SQL Server Management Studio, go to Tools -> Options
             schema (with a dot) need to be enclosed in quotes for this
             to work in older versions of SSMS.
 
-VERSION:    2021-08-07
+VERSION:    2021-08-11
 
 */
 
@@ -119,6 +119,7 @@ IF (@object_id IS NULL) BEGIN;
         FROM rcte
         WHERE remain LIKE N'%'+@objname+N'%')
 
+    --- Modules: Procedures, views, triggers, etc.
     SELECT o.[type_desc] AS [Type], s.[name]+N'.'+o.[name] AS [Object], STR(line, 5, 0) AS [Line no], [sql] AS [Definition]
     FROM rcte
     INNER JOIN sys.objects AS o ON rcte.[object_id]=o.[object_id]
@@ -127,18 +128,55 @@ IF (@object_id IS NULL) BEGIN;
 
     UNION ALL
 
-    SELECT t.[type_desc], s.[name]+N'.'+t.[name], '', ISNULL(c.[name], N'')
+    --- Columns or computed column definitions:
+    SELECT t.[type_desc] AS [Type], s.[name]+N'.'+t.[name] AS [Object], '' AS [Line no],
+           COALESCE(cc.[name]+N' AS '+cc.[definition], c.[name], N'') AS [Definition]
     FROM sys.tables AS t
     INNER JOIN sys.schemas AS s ON t.[schema_id]=s.[schema_id]
     LEFT JOIN sys.columns AS c ON t.[object_id]=c.[object_id] AND c.[name] LIKE N'%'+@objname+N'%'
+    LEFT JOIN sys.computed_columns AS cc ON t.[object_id]=cc.[object_id] AND cc.[definition] LIKE N'%'+@objname+N'%'
     LEFT JOIN sys.extended_properties AS ep ON ep.class=1 AND ep.major_id=t.[object_id] AND ep.minor_id=c.column_id
     WHERE t.[name] LIKE N'%'+@objname+N'%' OR
           c.[name] LIKE N'%'+@objname+N'%' OR
+          cc.[definition] LIKE N'%'+@objname+N'%' OR
           CAST(ep.[value] AS nvarchar(max)) LIKE N'%'+@objname+N'%'
 
     UNION ALL
+        
+    --- Default constraints:
+    SELECT c.[type_desc] AS [Type], s.[name]+N'.'+c.[name] AS [Object], '' AS [Line no],
+           CAST(N'DEFAULT '+c.[definition] AS nvarchar(max)) AS [Definition]
+    FROM sys.default_constraints AS c
+    INNER JOIN sys.schemas AS s ON c.[schema_id]=s.[schema_id]
+    WHERE c.[name] LIKE N'%'+@objname+N'%' OR
+          c.[definition] LIKE N'%'+@objname+N'%'
 
-    SELECT N'SCHEMA' AS [Type], s.[name] AS [Object], '' AS [Line no], ISNULL(CAST(ep.[value] AS nvarchar(max)), N'') AS [Definition]
+    UNION ALL
+
+    --- Check constraints:
+    SELECT c.[type_desc] AS [Type], s.[name]+N'.'+c.[name] AS [Object], '' AS [Line no],
+           CAST(N'CHECK '+c.[definition] AS nvarchar(max)) AS [Definition]
+    FROM sys.check_constraints AS c
+    INNER JOIN sys.schemas AS s ON c.[schema_id]=s.[schema_id]
+    WHERE c.[name] LIKE N'%'+@objname+N'%' OR
+          c.[definition] LIKE N'%'+@objname+N'%'
+
+    UNION ALL
+
+    --- Indexes and index filter definitions:
+    SELECT i.[type_desc]+N' INDEX' AS [Type], s.[name]+N'.'+o.[name]+N'.'+i.[name] AS [Object], '' AS [Line no],
+           ISNULL(N'WHERE '+i.filter_definition, N'') AS [Definition]
+    FROM sys.indexes AS i
+    INNER JOIN sys.objects AS o ON i.[object_id]=o.[object_id]
+    INNER JOIN sys.schemas AS s ON o.[schema_id]=s.[schema_id]
+    WHERE i.[name] LIKE N'%'+@objname+N'%' OR
+          i.filter_definition LIKE N'%'+@objname+N'%'
+
+    UNION ALL
+
+    --- Schemas:
+    SELECT N'SCHEMA' AS [Type], s.[name] AS [Object], '' AS [Line no],
+           ISNULL(CAST(ep.[value] AS nvarchar(max)), N'') AS [Definition]
     FROM sys.schemas AS s
     LEFT JOIN sys.extended_properties AS ep ON ep.class=3 AND ep.major_id=s.[schema_id]
     WHERE s.[name] LIKE N'%'+@objname+N'%' OR
