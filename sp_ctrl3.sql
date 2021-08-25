@@ -36,7 +36,7 @@ SHORTCUT:   In SQL Server Management Studio, go to Tools -> Options
             schema (with a dot) need to be enclosed in quotes for this
             to work in older versions of SSMS.
 
-VERSION:    2021-08-11
+VERSION:    2021-08-25
 
 */
 
@@ -107,17 +107,28 @@ SET @object_id_str=CAST(@object_id AS nvarchar(20));
 IF (@object_id IS NULL) BEGIN;
 
     WITH rcte AS (
-        SELECT [object_id], 0 AS line, CAST(NULL AS nvarchar(max)) AS [sql], REPLACE([definition], NCHAR(13)+NCHAR(10), NCHAR(13)) AS remain
+        SELECT [object_id], 1 AS line, CAST(NULL AS nvarchar(max)) AS [sql], REPLACE([definition], NCHAR(13)+NCHAR(10), NCHAR(13)) AS remain
         FROM sys.sql_modules
         WHERE [definition] LIKE N'%'+@objname+N'%'
 
         UNION ALL
 
-        SELECT [object_id], line+1,
-               CAST(LEFT(remain, PATINDEX(N'%['+NCHAR(10)+NCHAR(13)+N']%', remain+NCHAR(13))-1) AS nvarchar(max)),
-               CAST(SUBSTRING(remain, PATINDEX(N'%['+NCHAR(10)+NCHAR(13)+N']%', remain+NCHAR(13))+1, LEN(remain)) AS nvarchar(max))
+        SELECT rcte.[object_id],
+               CAST(rcte.line+LEN(x2.left_of_keyword)-LEN(REPLACE(REPLACE(x2.left_of_keyword, NCHAR(10), N''), NCHAR(13), N'')) AS int) AS line,
+               CAST(RIGHT(x2.left_of_keyword, PATINDEX(N'%['+NCHAR(10)+NCHAR(13)+N']%', REVERSE(x2.left_of_keyword)+NCHAR(10))-1)+
+                    SUBSTRING(rcte.remain, x1.keyword_offset, x2.offset_to_next_line) AS nvarchar(max)) AS [sql],
+               CAST(SUBSTRING(rcte.remain, x1.keyword_offset+x2.offset_to_next_line, LEN(rcte.remain)) AS nvarchar(max)) AS remain
         FROM rcte
-        WHERE remain LIKE N'%'+@objname+N'%')
+        CROSS APPLY (
+            VALUES (
+                PATINDEX(N'%'+@objname+N'%', rcte.remain)
+            )) AS x1(keyword_offset)
+        CROSS APPLY (
+            VALUES (
+                LEFT(rcte.remain, x1.keyword_offset-1),
+                PATINDEX(N'%['+NCHAR(10)+NCHAR(13)+N']%', SUBSTRING(rcte.remain, x1.keyword_offset, LEN(rcte.remain))+NCHAR(10))-1
+            )) AS x2(left_of_keyword, offset_to_next_line)                
+        WHERE x1.keyword_offset>0)
 
     --- Modules: Procedures, views, triggers, etc.
     SELECT o.[type_desc] AS [Type], s.[name]+N'.'+o.[name] AS [Object], STR(line, 5, 0) AS [Line no], [sql] AS [Definition]
