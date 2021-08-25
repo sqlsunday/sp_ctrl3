@@ -135,7 +135,7 @@ IF (@object_id IS NULL) BEGIN;
     FROM rcte
     INNER JOIN sys.objects AS o ON rcte.[object_id]=o.[object_id]
     INNER JOIN sys.schemas AS s ON o.[schema_id]=s.[schema_id]
-    WHERE rcte.[sql] LIKE N'%'+@objname+N'%'
+    WHERE rcte.[sql] IS NOT NULL
 
     UNION ALL
 
