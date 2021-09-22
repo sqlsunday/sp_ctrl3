@@ -36,7 +36,7 @@ SHORTCUT:   In SQL Server Management Studio, go to Tools -> Options
             schema (with a dot) need to be enclosed in quotes for this
             to work in older versions of SSMS.
 
-VERSION:    2021-08-25
+VERSION:    2021-09-22
 
 */
 
@@ -381,6 +381,13 @@ DECLARE @syspartitionstats TABLE (
     lob_used_page_count          bigint NULL,
     used_page_count              bigint NULL,
     PRIMARY KEY CLUSTERED ([partition_id])
+);
+
+DECLARE @destination_data_spaces TABLE (
+    partition_scheme_id         int NOT NULL,
+    partition_number            int NOT NULL,
+    data_space_id               int NOT NULL,
+    PRIMARY KEY CLUSTERED (partition_scheme_id, partition_number)
 );
 
 DECLARE @columnstore_rowgroups TABLE (
@@ -742,6 +749,22 @@ END TRY
 BEGIN CATCH;
 	PRINT 'Problem compiling partition stats: '+ERROR_MESSAGE();
 END CATCH;
+
+
+
+
+BEGIN TRY;
+    INSERT INTO @destination_data_spaces
+    EXEC(N'
+    SELECT partition_scheme_id, destination_id AS partition_number, data_space_id
+    FROM '+@database+N'.sys.destination_data_spaces');
+END TRY
+BEGIN CATCH;
+    PRINT 'Could not view sys.destination_data_spaces.';
+END CATCH;
+
+
+
 
 BEGIN TRY;
     INSERT INTO @columnstore_rowgroups
@@ -1542,6 +1565,7 @@ IF (@has_data=1 AND @rowcount>0)
 	       --- Storage properties:
 	       ISNULL(NULLIF(NULLIF(p.data_compression_desc, N'NONE'), N'COLUMNSTORE'), N'') AS [Compression],
 	       ds.[name]+ISNULL('('+pc.[name]+N')', N'') AS [Data space],
+           ISNULL(ds2.[name], ds.[name]) AS [Filegroup],
 	       (CASE WHEN ix.[type_desc]!=N'HEAP' THEN STR(ISNULL(NULLIF(ix.fill_factor, 0), 100), 4, 0)+'%' ELSE '' END) AS [Fill factor],
 
 	       --- The raw numbers:
@@ -1560,6 +1584,8 @@ IF (@has_data=1 AND @rowcount>0)
 	LEFT JOIN @sysindexes AS ix ON p.[object_id]=ix.[object_id] AND p.index_id=ix.index_id
 	--- Data space is either a file group or a partition function:
 	LEFT JOIN @sysdataspaces AS ds ON ix.data_space_id=ds.data_space_id
+    LEFT JOIN @destination_data_spaces AS dds ON ds.data_space_id=dds.partition_scheme_id AND p.partition_number=dds.partition_number
+    LEFT JOIN @sysdataspaces AS ds2 ON dds.data_space_id=ds2.data_space_id
 	--- This is the partitioning column:
 	LEFT JOIN @sysindexcolumns AS ixc ON ix.[object_id]=ixc.[object_id] AND
 	    ix.index_id=ixc.index_id AND ixc.partition_ordinal>0
