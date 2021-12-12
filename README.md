@@ -2,7 +2,7 @@
 
 Copyright Daniel Hutmacher under [Creative Commons 4.0 license with attribution](http://creativecommons.org/licenses/by/4.0/).
 
-Source: http://sqlsunday.com/downloads/
+Source: https://github.com/sqlsunday/sp_ctrl3
 
 **DISCLAIMER:** This script may not be suitable to run in a production
 environment. I cannot assume any responsibility regarding
