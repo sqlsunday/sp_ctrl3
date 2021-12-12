@@ -64,6 +64,7 @@ DECLARE @object_id              int,
 	    @has_permissions        bit,
 	    @has_sql_module         bit,
 	    @has_data               bit,
+        @has_policies           bit,
 		@is_azure_sql_db		bit=(CASE WHEN CAST(SERVERPROPERTY(N'Edition') AS varchar(100)) LIKE N'%Azure%' THEN 1 ELSE 0 END),
 	    @is_tempdb              bit=0,
         @module_definition      nvarchar(max),
@@ -439,6 +440,16 @@ DECLARE @references TABLE (
     UNIQUE (child_id, parent_row)
 );
 
+DECLARE @syssecuritypolicies TABLE (
+    security_policy_id          int NOT NULL,
+    security_predicate_id       int NOT NULL,
+    predicate_type_desc         nvarchar(60) COLLATE database_default NOT NULL,
+    predicate_definition        nvarchar(max) COLLATE database_default NOT NULL,
+    is_enabled                  bit NOT NULL,
+    is_schema_bound             bit NOT NULL,
+    PRIMARY KEY CLUSTERED (security_policy_id, security_predicate_id)
+);
+
 DECLARE @syssqlmodules TABLE (
     [definition]        nvarchar(max) COLLATE database_default NULL,
     uses_ansi_nulls     bit NULL,
@@ -802,6 +813,27 @@ WHERE sg.is_signed=1
   AND o.[object_id]='+@object_id_str+';
 ');
 
+BEGIN TRY;
+    INSERT INTO @syssecuritypolicies
+    EXEC(N'
+	    SELECT p.[object_id] AS security_policy_id,
+               sp.security_predicate_id,
+               sp.predicate_type_desc COLLATE database_default,
+               sp.predicate_definition COLLATE database_default,
+               p.is_enabled,
+               p.is_schema_bound
+	    FROM '+@database+N'.sys.security_policies AS p
+	    INNER JOIN '+@database+N'.sys.security_predicates AS sp ON p.[object_id]=sp.[object_id]
+	    INNER JOIN '+@database+N'.sys.objects AS o ON sp.target_object_id=o.[object_id]
+	    INNER JOIN '+@database+N'.sys.schemas AS os ON o.[schema_id]=os.[schema_id]
+        WHERE sp.target_object_id='+@object_id_str+';');
+
+END TRY
+BEGIN CATCH;
+    PRINT 'Could not view sys.security_policies.';
+END CATCH;
+
+
 INSERT INTO @systriggers
 EXEC(N'
 SELECT t.[object_id], t.[name], t.is_disabled, t.is_instead_of_trigger,
@@ -864,6 +896,7 @@ SELECT TOP 1 @has_cols_or_params=(CASE WHEN col.[object_id] IS NOT NULL OR par.p
              @has_permissions=   (CASE WHEN per.major_id IS NOT NULL THEN 1 ELSE 0 END),
              @has_sql_module=    (CASE WHEN @module_definition IS NOT NULL THEN 1 ELSE 0 END),
              @has_data=          (CASE WHEN obj.[type] IN ('IT', 'U', 'S') OR obj.[type]='V' AND ix.index_id IS NOT NULL THEN 1 ELSE 0 END),
+             @has_policies=      (CASE WHEN pol.security_policy_id IS NOT NULL THEN 1 ELSE 0 END),
              @rowcount=          (SELECT SUM([rows]) FROM @syspartitions WHERE [object_id]=@object_id AND index_id IN (0, 1)),
              @type=              obj.[type]
 FROM @sysobjects AS obj
@@ -873,6 +906,7 @@ LEFT JOIN @sysindexes AS ix ON ix.[object_id]=@object_id AND ix.index_id!=0 -- n
 LEFT JOIN @sysforeignkeys AS fk ON @object_id IN (fk.parent_object_id, fk.referenced_object_id)
 LEFT JOIN @sysexprdependencies AS dep ON @object_id IN (dep.referencing_id, dep.referenced_id)
 LEFT JOIN @sysdatabasepermissions AS per ON per.class=1 AND per.major_id=@object_id
+LEFT JOIN @syssecuritypolicies AS pol ON 1=1
 WHERE obj.[object_id]=@object_id;
 
 IF (EXISTS (SELECT NULL FROM @signatures)) SET @has_permissions=1;
@@ -1213,6 +1247,24 @@ IF (@has_foreign_keys=1)
 	WHERE @object_id IN (fk.parent_object_id, fk.referenced_object_id)
 	ORDER BY (CASE WHEN fk.parent_object_id=@object_id THEN 1 ELSE 2 END), fk.[name];
 
+
+
+
+
+--- Security policies
+IF (@has_policies=1)
+	SELECT N'ALTER SECURITY POLICY '+ps.[name]+N'.'+po.[name] AS [Security policy],
+           N'ADD '+pol.predicate_type_desc+N' PREDICATE' AS [Predicate],
+           pol.predicate_definition AS [Definition],
+           N'ON ['+s.[name]+N'].['+o.[name]+N']' AS [Target],
+           N'WITH (STATE='+(CASE WHEN pol.is_enabled=1 THEN N'ON' ELSE N'OFF' END)+
+               (CASE WHEN pol.is_schema_bound=1 THEN N', SCHEMABINDING=ON' ELSE N'' END)+N');' AS [Options]
+    FROM @syssecuritypolicies AS pol
+	INNER JOIN @sysobjects AS po ON pol.security_policy_id=po.[object_id]
+	INNER JOIN @sysschemas AS ps ON po.[schema_id]=ps.[schema_id]
+	INNER JOIN @sysobjects AS o ON o.[object_id]=@object_id
+	INNER JOIN @sysschemas AS s ON o.[schema_id]=s.[schema_id]
+    ORDER BY ps.[name], po.[name], pol.security_predicate_id;
 
 
 
