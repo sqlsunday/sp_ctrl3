@@ -566,7 +566,7 @@ BEGIN TRY;
             (CASE WHEN s.is_cached=0 THEN N'' NOCACHE''
                   WHEN s.is_cached=1 THEN ISNULL(N''CACHE ''+CAST(s.cache_size AS nvarchar(10)), '''')
                   END) AS [definition], 0 AS is_persisted,
-           t.[name] AS [type_name], NULL AS default_name, 1 AS default_is_system_named, s.current_value
+           t.[name] AS [type_name], NULL AS default_name, 1 AS default_is_system_named, s.current_value, NULL, NULL
     FROM '+@database+N'.sys.sequences AS s
     LEFT JOIN '+@database+N'.sys.types AS t ON s.user_type_id=t.user_type_id
     LEFT JOIN '+@database+N'.sys.types AS st ON s.system_type_id=st.user_type_id
