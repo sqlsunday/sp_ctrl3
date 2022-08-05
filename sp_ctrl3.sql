@@ -36,7 +36,7 @@ SHORTCUT:   In SQL Server Management Studio, go to Tools -> Options
             schema (with a dot) need to be enclosed in quotes for this
             to work in older versions of SSMS.
 
-VERSION:    2021-12-12
+VERSION:    2022-08-06
 
 */
 
@@ -107,8 +107,22 @@ SET @object_id_str=CAST(@object_id AS nvarchar(20));
 
 IF (@object_id IS NULL) BEGIN;
 
+    CREATE TABLE #results (
+        [type_desc]         nvarchar(60) NOT NULL,
+        [schema_id]         int NOT NULL,
+        major_id            int NOT NULL,
+        minor_id            int NULL,
+        index_id            int NULL,
+        line                int NULL,
+        [Definition]        nvarchar(max) NULL,
+        row_count           bigint NULL,
+        line_count          int NULL,
+    );
+
+    --- T-SQL modules like stored procedures, views, function, triggers, etc.
     WITH rcte AS (
-        SELECT [object_id], 1 AS line, CAST(NULL AS nvarchar(max)) AS [sql], REPLACE([definition], NCHAR(13)+NCHAR(10), NCHAR(13)) AS remain
+        SELECT [object_id], 1 AS line, CAST(NULL AS nvarchar(max)) AS [sql], REPLACE([definition], NCHAR(13)+NCHAR(10), NCHAR(13)) AS remain,
+               LEN([definition])-LEN(REPLACE([definition], CHAR(13), N'')) AS line_count
         FROM sys.sql_modules
         WHERE [definition] LIKE N'%'+@objname+N'%'
 
@@ -118,7 +132,8 @@ IF (@object_id IS NULL) BEGIN;
                CAST(rcte.line+LEN(x2.left_of_keyword)-LEN(REPLACE(REPLACE(x2.left_of_keyword, NCHAR(10), N''), NCHAR(13), N'')) AS int) AS line,
                CAST(RIGHT(x2.left_of_keyword, PATINDEX(N'%['+NCHAR(10)+NCHAR(13)+N']%', REVERSE(x2.left_of_keyword)+NCHAR(10))-1)+
                     SUBSTRING(rcte.remain, x1.keyword_offset, x2.offset_to_next_line) AS nvarchar(max)) AS [sql],
-               CAST(SUBSTRING(rcte.remain, x1.keyword_offset+x2.offset_to_next_line, LEN(rcte.remain)) AS nvarchar(max)) AS remain
+               CAST(SUBSTRING(rcte.remain, x1.keyword_offset+x2.offset_to_next_line, LEN(rcte.remain)) AS nvarchar(max)) AS remain,
+               rcte.line_count
         FROM rcte
         CROSS APPLY (
             VALUES (
@@ -130,72 +145,200 @@ IF (@object_id IS NULL) BEGIN;
                 PATINDEX(N'%['+NCHAR(10)+NCHAR(13)+N']%', SUBSTRING(rcte.remain, x1.keyword_offset, LEN(rcte.remain))+NCHAR(10))-1
             )) AS x2(left_of_keyword, offset_to_next_line)                
         WHERE x1.keyword_offset>0)
-
-    --- Modules: Procedures, views, triggers, etc.
-    SELECT o.[type_desc] AS [Type], s.[name]+N'.'+o.[name] AS [Object], STR(line, 5, 0) AS [Line no], [sql] AS [Definition]
+        
+    INSERT INTO #results ([type_desc], [schema_id], major_id, line, [Definition], line_count)
+    SELECT o.[type_desc], o.[schema_id], o.[object_id] AS major_id, rcte.line, rcte.[sql] AS [Definition], rcte.line_count
     FROM rcte
     INNER JOIN sys.objects AS o ON rcte.[object_id]=o.[object_id]
-    INNER JOIN sys.schemas AS s ON o.[schema_id]=s.[schema_id]
     WHERE rcte.[sql] IS NOT NULL
+    OPTION (MAXRECURSION 0);
 
-    UNION ALL
 
     --- Columns or computed column definitions:
-    SELECT t.[type_desc] AS [Type], s.[name]+N'.'+t.[name] AS [Object], '' AS [Line no],
+    INSERT INTO #results ([type_desc], [schema_id], major_id, minor_id, [Definition])
+    SELECT t.[type_desc], t.[schema_id], t.[object_id] AS major_id, c.column_id AS minor_id,
            COALESCE(cc.[name]+N' AS '+cc.[definition], c.[name], N'') AS [Definition]
     FROM sys.tables AS t
-    INNER JOIN sys.schemas AS s ON t.[schema_id]=s.[schema_id]
-    LEFT JOIN sys.columns AS c ON t.[object_id]=c.[object_id] AND c.[name] LIKE N'%'+@objname+N'%'
+    INNER JOIN sys.columns AS c ON t.[object_id]=c.[object_id] AND c.[name] LIKE N'%'+@objname+N'%'
     LEFT JOIN sys.computed_columns AS cc ON t.[object_id]=cc.[object_id] AND cc.[definition] LIKE N'%'+@objname+N'%'
-    LEFT JOIN sys.extended_properties AS ep ON ep.class=1 AND ep.major_id=t.[object_id] AND ep.minor_id=c.column_id
-    WHERE t.[name] LIKE N'%'+@objname+N'%' OR
-          c.[name] LIKE N'%'+@objname+N'%' OR
+    LEFT JOIN sys.extended_properties AS ep ON ep.class=1 AND ep.major_id=t.[object_id] AND ep.minor_id=c.column_id AND ep.[name]=N'Description'
+    WHERE c.[name] LIKE N'%'+@objname+N'%' OR
           cc.[definition] LIKE N'%'+@objname+N'%' OR
-          CAST(ep.[value] AS nvarchar(max)) LIKE N'%'+@objname+N'%'
+          CAST(ep.[value] AS nvarchar(max)) LIKE N'%'+@objname+N'%';
 
-    UNION ALL
-        
+
     --- Default constraints:
-    SELECT c.[type_desc] AS [Type], s.[name]+N'.'+c.[name] AS [Object], '' AS [Line no],
-           CAST(N'DEFAULT '+c.[definition] AS nvarchar(max)) AS [Definition]
+    INSERT INTO #results ([type_desc], [schema_id], major_id, minor_id, [Definition])
+    SELECT c.[type_desc], o.[schema_id], o.[object_id] AS major_id, oc.column_id AS minor_id,
+           ISNULL(oc.[name]+N' ', N'')+N'CONSTRAINT '+c.[name]+N' DEFAULT '+c.[definition] AS [Definition]
     FROM sys.default_constraints AS c
     INNER JOIN sys.schemas AS s ON c.[schema_id]=s.[schema_id]
+    LEFT JOIN sys.objects AS o ON c.parent_object_id=o.[object_id]
+    LEFT JOIN sys.schemas AS os ON o.[schema_id]=os.[schema_id]
+    LEFT JOIN sys.columns AS oc ON c.parent_object_id=oc.[object_id] AND c.parent_column_id=oc.column_id
     WHERE c.[name] LIKE N'%'+@objname+N'%' OR
-          c.[definition] LIKE N'%'+@objname+N'%'
+          c.[definition] LIKE N'%'+@objname+N'%';
 
-    UNION ALL
 
     --- Check constraints:
-    SELECT c.[type_desc] AS [Type], s.[name]+N'.'+c.[name] AS [Object], '' AS [Line no],
-           CAST(N'CHECK '+c.[definition] AS nvarchar(max)) AS [Definition]
+    INSERT INTO #results ([type_desc], [schema_id], major_id, minor_id, [Definition])
+    SELECT c.[type_desc], o.[schema_id], o.[object_id] AS major_id, oc.column_id AS minor_id,
+           ISNULL(oc.[name]+N' ', N'')+N'CONSTRAINT '+c.[name]+N' CHECK '+c.[definition] AS [Definition]
     FROM sys.check_constraints AS c
     INNER JOIN sys.schemas AS s ON c.[schema_id]=s.[schema_id]
+    LEFT JOIN sys.objects AS o ON c.parent_object_id=o.[object_id]
+    LEFT JOIN sys.schemas AS os ON o.[schema_id]=os.[schema_id]
+    LEFT JOIN sys.columns AS oc ON c.parent_object_id=oc.[object_id] AND c.parent_column_id=oc.column_id
     WHERE c.[name] LIKE N'%'+@objname+N'%' OR
-          c.[definition] LIKE N'%'+@objname+N'%'
+          c.[definition] LIKE N'%'+@objname+N'%';
 
-    UNION ALL
 
     --- Indexes and index filter definitions:
-    SELECT i.[type_desc]+N' INDEX' AS [Type], s.[name]+N'.'+o.[name]+N'.'+i.[name] AS [Object], '' AS [Line no],
-           ISNULL(N'WHERE '+i.filter_definition, N'') AS [Definition]
+    INSERT INTO #results ([type_desc], [schema_id], major_id, index_id, [Definition], row_count)
+    SELECT N'INDEX' AS [type_desc], o.[schema_id], o.[object_id] AS major_id, i.index_id,
+           (CASE WHEN i.is_unique=1 THEN N'UNIQUE ' ELSE N'' END)+i.[type_desc]+
+           (CASE WHEN i.index_id>0 THEN N' INDEX' ELSE N'' END)+
+           ISNULL(N' '+i.[name], N'')+
+           ISNULL(N' WHERE '+i.filter_definition, N'') AS [Definition],
+           (SELECT SUM(p.[rows])
+            FROM sys.partitions AS p
+            WHERE p.[object_id]=i.[object_id] AND p.index_id=i.index_id) AS row_count
     FROM sys.indexes AS i
     INNER JOIN sys.objects AS o ON i.[object_id]=o.[object_id]
     INNER JOIN sys.schemas AS s ON o.[schema_id]=s.[schema_id]
     WHERE i.[name] LIKE N'%'+@objname+N'%' OR
-          i.filter_definition LIKE N'%'+@objname+N'%'
+          i.filter_definition LIKE N'%'+@objname+N'%';
 
-    UNION ALL
 
-    --- Schemas:
-    SELECT N'SCHEMA' AS [Type], s.[name] AS [Object], '' AS [Line no],
-           ISNULL(CAST(ep.[value] AS nvarchar(max)), N'') AS [Definition]
+
+
+
+
+    --- Tables and objects:
+    INSERT INTO #results ([type_desc], [schema_id], major_id, row_count)
+    SELECT o.[type_desc], o.[schema_id], o.[object_id] AS major_id,
+           (SELECT SUM(p.[rows])
+            FROM sys.partitions AS p
+            WHERE p.[object_id]=o.[object_id] AND p.index_id IN (0, 1)) AS row_count
+    FROM sys.objects AS o
+    LEFT JOIN sys.extended_properties AS ep ON ep.class=1 AND ep.major_id=o.[object_id] AND ep.minor_id=0 AND ep.[name]=N'Description'
+    WHERE o.parent_object_id=0 AND (
+          o.[object_id] IN (SELECT major_id FROM #results)
+      AND o.[object_id] NOT IN (SELECT major_id FROM #results WHERE major_id IS NOT NULL AND COALESCE(minor_id, index_id, line) IS NULL)
+       OR o.[name] LIKE N'%'+@objname+N'%'
+       OR CAST(ep.[value] AS nvarchar(max)) LIKE N'%'+@objname+N'%');
+
+
+    --- Schema
+    INSERT INTO #results ([type_desc], [schema_id], major_id, minor_id)
+    SELECT N'SCHEMA', s.[schema_id], 0, 0
     FROM sys.schemas AS s
-    LEFT JOIN sys.extended_properties AS ep ON ep.class=3 AND ep.major_id=s.[schema_id]
+    LEFT JOIN sys.extended_properties AS ep ON ep.class=3 AND ep.major_id=s.[schema_id] AND ep.minor_id=0 AND ep.[name]=N'Description'
     WHERE s.[name] LIKE N'%'+@objname+N'%' OR
           CAST(ep.[value] AS nvarchar(max)) LIKE N'%'+@objname+N'%'
+       OR s.[schema_id] IN (SELECT [schema_id] FROM #results)
+      AND s.[schema_id] NOT IN (SELECT [schema_id] FROM #results WHERE [type_desc]=N'SCHEMA');
 
-    ORDER BY [Object], [Line no]
+
+
+
+
+
+
+    --- Output the results in a fancypants ASCII graph:
+    SELECT (CASE WHEN o._ordinal=0 THEN s.[name] ELSE N'' END) AS [Schema],
+           ISNULL((CASE WHEN x._ordinal=0 THEN o.[type_desc] ELSE N'' END), N'') AS [Object type],
+           ISNULL((CASE WHEN x._ordinal=0 THEN o.[Name] WHEN x._ordinal=1 AND x._count>1 THEN N'/' WHEN x._ordinal=x._count THEN N'\' ELSE N'|' END), N'') AS [Object],
+           ISNULL(STR(x.line, 10, 0), N'') AS [Line no],
+           (CASE WHEN x._ordinal=0 THEN COALESCE(CAST(o.line_count AS varchar(20))+' lines', CAST(o.row_count AS varchar(20))+' rows', '')
+                 WHEN x.index_id IS NOT NULL THEN ISNULL(CAST(x.row_count AS varchar(20))+' rows', '')
+                 ELSE '' END) AS [Size],
+           ISNULL(x.[Definition], N'') AS [Definition],
+           ISNULL((CASE WHEN x._ordinal>0 THEN x.[Description]
+                        WHEN x._ordinal=0 THEN o.[Description]
+                        WHEN o._ordinal=0 THEN ep.[value] END), N'') AS [Description]
+    FROM #results AS x1
+    INNER JOIN sys.schemas AS s ON x1.[schema_id]=s.[schema_id]
+    LEFT JOIN sys.extended_properties AS ep ON ep.class=3 AND ep.major_id=s.[schema_id] AND ep.minor_id=0 AND ep.[name]=N'Description'
+
+    --- For each schema, return one blank offset row and the objects for that schema:
+    OUTER APPLY (
+        SELECT ROW_NUMBER() OVER (PARTITION BY s.[schema_id] ORDER BY o.[name]) AS _ordinal,
+               COUNT(*) OVER (PARTITION BY s.[schema_id]) AS _count,
+               o.[object_id], o.[name], o.[type_desc], ep.[value] AS [Description],
+               row_count, line_count
+        FROM #results AS res
+        INNER JOIN sys.objects AS o ON res.major_id=o.[object_id]
+        LEFT JOIN sys.extended_properties AS ep ON ep.class=1 AND ep.major_id=res.major_id AND ep.minor_id=0 AND ep.[name]=N'Description'
+        WHERE res.[schema_id]=s.[schema_id] AND COALESCE(res.minor_id, res.index_id, res.line) IS NULL
+
+        UNION ALL
+
+        SELECT 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        ) AS o
+
+    --- .. and for each object, return a blank offset row and all of the lines/columns/etc for that object:
+    OUTER APPLY (
+        SELECT ROW_NUMBER() OVER (PARTITION BY res.major_id ORDER BY res.minor_id) AS _ordinal,
+               COUNT(*) OVER (PARTITION BY res.major_id) AS _count,
+               res.line,
+               res.minor_id, res.index_id, res.row_count,
+               res.[Definition], ep.[value] AS [Description]
+        FROM #results AS res
+        LEFT JOIN sys.extended_properties AS ep ON ep.class=1 AND ep.major_id=res.major_id AND ep.minor_id=res.minor_id AND ep.[name]=N'Description'
+        WHERE res.major_id=o.[object_id] AND COALESCE(res.minor_id, res.index_id, res.line) IS NOT NULL
+
+        UNION ALL
+
+        SELECT 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        ) AS x
+    WHERE x1.major_id=0
+    ORDER BY s.[name], o._ordinal, x._ordinal;
+
+
+
+
+
+
+    DROP TABLE #results;
+
+    RETURN;
+
+
+
+
+
+
+/*        ,
+
+    search AS (
+)
+
+    SELECT class, parent_class, parent_id, major_id, minor_id, ordinal, [Type], [Line no], [Definition], Size
+    INTO #search_results
+    FROM search
     OPTION (MAXRECURSION 0);
+
+    INSERT INTO #search_results (class, parent_class, parent_id, major_id, minor_id, ordinal, [Type], [Line no], [Definition], Size)
+    SELECT 1 AS class, 3 AS parent_class, [schema_id] AS parent_id, [object_id] AS major_id, 0 AS minor_id, 0 AS ordinal,
+           t.[type_desc] AS [Type], '' AS [Line no],
+           NULL AS [Definition],
+           ISNULL((SELECT REPLACE(CONVERT(varchar(20), CAST(NULLIF(SUM(p.[rows]), 0) AS money), 1), '.00', '')+' rows'
+                   FROM sys.partitions AS p
+                   WHERE p.[object_id]=t.[object_id] AND p.index_id IN (0, 1)), '(empty)') AS [Size]
+    FROM sys.tables AS t
+    WHERE t.[object_id] IN (SELECT major_id FROM #search_results WHERE class IN (-1, 51))
+      AND t.[object_id] NOT IN (SELECT major_id FROM #search_results WHERE class=1);
+
+    INSERT INTO #search_results (class, parent_id, major_id, minor_id, ordinal, [Type], [Line no], [Definition], Size)
+    SELECT 3 AS class, NULL AS parent_id, s.[schema_id] AS major_id, 0 AS minor_id, 0 AS ordinal,
+           N'SCHEMA' AS [Type], '' AS [Line no],
+           N'' AS [Definition], '' AS [Size]
+    FROM sys.schemas AS s
+    WHERE s.[schema_id] IN (SELECT parent_id FROM #search_results WHERE class=1)
+      AND s.[schema_id] NOT IN (SELECT major_id FROM #search_results WHERE class=3);
+*/
+
 
     RETURN;
 END;
