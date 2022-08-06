@@ -107,7 +107,7 @@ SET @object_id_str=CAST(@object_id AS nvarchar(20));
 
 IF (@object_id IS NULL) BEGIN;
 
-    CREATE TABLE #results (
+    DECLARE @search_results TABLE (
         [type_desc]         nvarchar(60) NOT NULL,
         [schema_id]         int NOT NULL,
         major_id            int NOT NULL,
@@ -117,6 +117,8 @@ IF (@object_id IS NULL) BEGIN;
         [Definition]        nvarchar(max) NULL,
         row_count           bigint NULL,
         line_count          int NULL,
+        _id                 int IDENTITY(1, 1) NOT NULL,
+        PRIMARY KEY CLUSTERED (major_id, _id)
     );
 
     --- T-SQL modules like stored procedures, views, function, triggers, etc.
@@ -146,7 +148,7 @@ IF (@object_id IS NULL) BEGIN;
             )) AS x2(left_of_keyword, offset_to_next_line)                
         WHERE x1.keyword_offset>0)
         
-    INSERT INTO #results ([type_desc], [schema_id], major_id, line, [Definition], line_count)
+    INSERT INTO @search_results ([type_desc], [schema_id], major_id, line, [Definition], line_count)
     SELECT o.[type_desc], o.[schema_id], o.[object_id] AS major_id, rcte.line, rcte.[sql] AS [Definition], rcte.line_count
     FROM rcte
     INNER JOIN sys.objects AS o ON rcte.[object_id]=o.[object_id]
@@ -155,7 +157,7 @@ IF (@object_id IS NULL) BEGIN;
 
 
     --- Columns or computed column definitions:
-    INSERT INTO #results ([type_desc], [schema_id], major_id, minor_id, [Definition])
+    INSERT INTO @search_results ([type_desc], [schema_id], major_id, minor_id, [Definition])
     SELECT t.[type_desc], t.[schema_id], t.[object_id] AS major_id, c.column_id AS minor_id,
            COALESCE(cc.[name]+N' AS '+cc.[definition], c.[name], N'') AS [Definition]
     FROM sys.tables AS t
@@ -168,7 +170,7 @@ IF (@object_id IS NULL) BEGIN;
 
 
     --- Default constraints:
-    INSERT INTO #results ([type_desc], [schema_id], major_id, minor_id, [Definition])
+    INSERT INTO @search_results ([type_desc], [schema_id], major_id, minor_id, [Definition])
     SELECT c.[type_desc], o.[schema_id], o.[object_id] AS major_id, oc.column_id AS minor_id,
            ISNULL(oc.[name]+N' ', N'')+N'CONSTRAINT '+c.[name]+N' DEFAULT '+c.[definition] AS [Definition]
     FROM sys.default_constraints AS c
@@ -181,7 +183,7 @@ IF (@object_id IS NULL) BEGIN;
 
 
     --- Check constraints:
-    INSERT INTO #results ([type_desc], [schema_id], major_id, minor_id, [Definition])
+    INSERT INTO @search_results ([type_desc], [schema_id], major_id, minor_id, [Definition])
     SELECT c.[type_desc], o.[schema_id], o.[object_id] AS major_id, oc.column_id AS minor_id,
            ISNULL(oc.[name]+N' ', N'')+N'CONSTRAINT '+c.[name]+N' CHECK '+c.[definition] AS [Definition]
     FROM sys.check_constraints AS c
@@ -194,7 +196,7 @@ IF (@object_id IS NULL) BEGIN;
 
 
     --- Indexes and index filter definitions:
-    INSERT INTO #results ([type_desc], [schema_id], major_id, index_id, [Definition], row_count)
+    INSERT INTO @search_results ([type_desc], [schema_id], major_id, index_id, [Definition], row_count)
     SELECT N'INDEX' AS [type_desc], o.[schema_id], o.[object_id] AS major_id, i.index_id,
            (CASE WHEN i.is_unique=1 THEN N'UNIQUE ' ELSE N'' END)+i.[type_desc]+
            (CASE WHEN i.index_id>0 THEN N' INDEX' ELSE N'' END)+
@@ -215,29 +217,32 @@ IF (@object_id IS NULL) BEGIN;
 
 
     --- Tables and objects:
-    INSERT INTO #results ([type_desc], [schema_id], major_id, row_count)
+    INSERT INTO @search_results ([type_desc], [schema_id], major_id, row_count, line_count)
     SELECT o.[type_desc], o.[schema_id], o.[object_id] AS major_id,
            (SELECT SUM(p.[rows])
             FROM sys.partitions AS p
-            WHERE p.[object_id]=o.[object_id] AND p.index_id IN (0, 1)) AS row_count
+            WHERE p.[object_id]=o.[object_id] AND p.index_id IN (0, 1)) AS row_count,
+           (SELECT TOP (1) line_count
+            FROM @search_results
+            WHERE major_id=o.[object_id] AND line_count IS NOT NULL) AS line_count
     FROM sys.objects AS o
     LEFT JOIN sys.extended_properties AS ep ON ep.class=1 AND ep.major_id=o.[object_id] AND ep.minor_id=0 AND ep.[name]=N'Description'
     WHERE o.parent_object_id=0 AND (
-          o.[object_id] IN (SELECT major_id FROM #results)
-      AND o.[object_id] NOT IN (SELECT major_id FROM #results WHERE major_id IS NOT NULL AND COALESCE(minor_id, index_id, line) IS NULL)
+          o.[object_id] IN (SELECT major_id FROM @search_results)
+      AND o.[object_id] NOT IN (SELECT major_id FROM @search_results WHERE major_id IS NOT NULL AND COALESCE(minor_id, index_id, line) IS NULL)
        OR o.[name] LIKE N'%'+@objname+N'%'
        OR CAST(ep.[value] AS nvarchar(max)) LIKE N'%'+@objname+N'%');
 
 
     --- Schema
-    INSERT INTO #results ([type_desc], [schema_id], major_id, minor_id)
+    INSERT INTO @search_results ([type_desc], [schema_id], major_id, minor_id)
     SELECT N'SCHEMA', s.[schema_id], 0, 0
     FROM sys.schemas AS s
     LEFT JOIN sys.extended_properties AS ep ON ep.class=3 AND ep.major_id=s.[schema_id] AND ep.minor_id=0 AND ep.[name]=N'Description'
     WHERE s.[name] LIKE N'%'+@objname+N'%' OR
           CAST(ep.[value] AS nvarchar(max)) LIKE N'%'+@objname+N'%'
-       OR s.[schema_id] IN (SELECT [schema_id] FROM #results)
-      AND s.[schema_id] NOT IN (SELECT [schema_id] FROM #results WHERE [type_desc]=N'SCHEMA');
+       OR s.[schema_id] IN (SELECT [schema_id] FROM @search_results)
+      AND s.[schema_id] NOT IN (SELECT [schema_id] FROM @search_results WHERE [type_desc]=N'SCHEMA');
 
 
 
@@ -248,16 +253,17 @@ IF (@object_id IS NULL) BEGIN;
     --- Output the results in a fancypants ASCII graph:
     SELECT (CASE WHEN o._ordinal=0 THEN s.[name] ELSE N'' END) AS [Schema],
            ISNULL((CASE WHEN x._ordinal=0 THEN o.[type_desc] ELSE N'' END), N'') AS [Object type],
-           ISNULL((CASE WHEN x._ordinal=0 THEN o.[Name] WHEN x._ordinal=1 AND x._count>1 THEN N'/' WHEN x._ordinal=x._count THEN N'\' ELSE N'|' END), N'') AS [Object],
-           ISNULL(STR(x.line, 10, 0), N'') AS [Line no],
-           (CASE WHEN x._ordinal=0 THEN COALESCE(CAST(o.line_count AS varchar(20))+' lines', CAST(o.row_count AS varchar(20))+' rows', '')
-                 WHEN x.index_id IS NOT NULL THEN ISNULL(CAST(x.row_count AS varchar(20))+' rows', '')
+           ISNULL((CASE WHEN x._ordinal=0 THEN s.[name]+N'.'+o.[Name] WHEN x._ordinal=1 AND x._count>1 THEN N'/' WHEN x._ordinal=x._count THEN N'\' ELSE N'|' END), N'') AS [Object],
+           (CASE WHEN x._ordinal=0           THEN COALESCE(REPLACE(CONVERT(varchar(20), CAST(o.line_count AS money), 1), '.00', '')+' lines',
+                                                           REPLACE(CONVERT(varchar(20), CAST(o.row_count  AS money), 1), '.00', '')+' rows', '')
+                 WHEN x.index_id IS NOT NULL THEN COALESCE(REPLACE(CONVERT(varchar(20), CAST(x.row_count  AS money), 1), '.00', '')+' rows', '')
                  ELSE '' END) AS [Size],
+           ISNULL(STR(x.line, 10, 0), N'') AS [Line no],
            ISNULL(x.[Definition], N'') AS [Definition],
            ISNULL((CASE WHEN x._ordinal>0 THEN x.[Description]
                         WHEN x._ordinal=0 THEN o.[Description]
                         WHEN o._ordinal=0 THEN ep.[value] END), N'') AS [Description]
-    FROM #results AS x1
+    FROM @search_results AS x1
     INNER JOIN sys.schemas AS s ON x1.[schema_id]=s.[schema_id]
     LEFT JOIN sys.extended_properties AS ep ON ep.class=3 AND ep.major_id=s.[schema_id] AND ep.minor_id=0 AND ep.[name]=N'Description'
 
@@ -267,7 +273,7 @@ IF (@object_id IS NULL) BEGIN;
                COUNT(*) OVER (PARTITION BY s.[schema_id]) AS _count,
                o.[object_id], o.[name], o.[type_desc], ep.[value] AS [Description],
                row_count, line_count
-        FROM #results AS res
+        FROM @search_results AS res
         INNER JOIN sys.objects AS o ON res.major_id=o.[object_id]
         LEFT JOIN sys.extended_properties AS ep ON ep.class=1 AND ep.major_id=res.major_id AND ep.minor_id=0 AND ep.[name]=N'Description'
         WHERE res.[schema_id]=s.[schema_id] AND COALESCE(res.minor_id, res.index_id, res.line) IS NULL
@@ -284,7 +290,7 @@ IF (@object_id IS NULL) BEGIN;
                res.line,
                res.minor_id, res.index_id, res.row_count,
                res.[Definition], ep.[value] AS [Description]
-        FROM #results AS res
+        FROM @search_results AS res
         LEFT JOIN sys.extended_properties AS ep ON ep.class=1 AND ep.major_id=res.major_id AND ep.minor_id=res.minor_id AND ep.[name]=N'Description'
         WHERE res.major_id=o.[object_id] AND COALESCE(res.minor_id, res.index_id, res.line) IS NOT NULL
 
@@ -297,10 +303,6 @@ IF (@object_id IS NULL) BEGIN;
 
 
 
-
-
-
-    DROP TABLE #results;
 
     RETURN;
 
@@ -1210,6 +1212,7 @@ IF (@has_cols_or_params=1) BEGIN;
            (CASE WHEN obj.[type]='SO' THEN ISNULL(N' '+[definition], N'') ELSE N'' END) AS [Options],
 		   (CASE WHEN obj.[type]='SO' THEN N'Current value '+CAST(col.current_value AS nvarchar(40))
                  WHEN ROW_NUMBER() OVER (ORDER BY col.is_output, COALESCE(col.parameter_id, col.column_id+999))=COUNT(*) OVER (PARTITION BY (SELECT NULL)) THEN N'' ELSE N',' END) AS [ ],
+           ISNULL(N'--> '+ref.[name], N'') AS [References],
            ISNULL(N'-- '+CAST(ep.[value] AS nvarchar(max)), N'') AS [Description]
 	FROM (SELECT column_id, CAST(NULL AS int) AS parameter_id, name, user_type_id, system_type_id,
 		         max_length, [precision], scale, is_sparse, is_nullable, collation_name,
@@ -1228,6 +1231,14 @@ IF (@has_cols_or_params=1) BEGIN;
                  NULL AS current_value, NULL AS generated_always_type_desc, NULL AS is_hidden
 	      FROM @sysparameters
 	      ) AS col
+    OUTER APPLY (
+        SELECT TOP (1) fks.[name]+N'.'+fko.[name]+N'('+fkc.[name]+N')' AS [name]
+        FROM @sysforeignkeycols AS fk
+        INNER JOIN @sysobjects AS fko ON fk.referenced_object_id=fko.[object_id]
+        INNER JOIN @syscolumns AS fkc ON fk.referenced_object_id=fkc.[object_id] AND fk.referenced_column_id=fkc.column_id
+        INNER JOIN @sysschemas AS fks ON fko.[schema_id]=fks.[schema_id]
+        WHERE fk.parent_object_id=@object_id AND fk.parent_column_id=col.column_id
+        ) AS ref
 	LEFT JOIN @xmlschemacollections AS xsc ON col.xml_collection_id=xsc.xml_collection_id
     LEFT JOIN @extended_properties AS ep ON ep.[object_id]=@object_id AND ep.column_id=col.column_id AND ep.[name]=N'MS_Description'
 	LEFT JOIN @sysschemas AS xsc_sch ON xsc.[schema_id]=xsc_sch.[schema_id]
@@ -1237,7 +1248,7 @@ IF (@has_cols_or_params=1) BEGIN;
 
     SELECT N'', N'', N', PERIOD FOR SYSTEM_TIME ('+
         MAX((CASE WHEN generated_always_type_desc='AS_ROW_START' THEN [name] ELSE N'' END))+N', '+
-        MAX((CASE WHEN generated_always_type_desc='AS_ROW_END' THEN [name] ELSE N'' END))+N')', N'', N'', N'', N'', N''
+        MAX((CASE WHEN generated_always_type_desc='AS_ROW_END' THEN [name] ELSE N'' END))+N')', N'', N'', N'', N'', N'', N''
 	FROM @syscolumns
 	WHERE [object_id]=@object_id
       AND generated_always_type_desc IN (N'AS_ROW_START', N'AS_ROW_END')
