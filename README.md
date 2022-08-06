@@ -8,7 +8,7 @@ Source: https://github.com/sqlsunday/sp_ctrl3
 environment. I cannot assume any responsibility regarding
 the accuracy of the output information, performance
 impacts on your server, or any other consequence. If
-your juristiction does not allow for this kind of
+your jurisdiction does not allow for this kind of
 waiver/disclaimer, or if you do not accept these terms,
 you are NOT allowed to store, distribute or use this
 code in any way.
