@@ -36,7 +36,7 @@ SHORTCUT:   In SQL Server Management Studio, go to Tools -> Options
             schema (with a dot) need to be enclosed in quotes for this
             to work in older versions of SSMS.
 
-VERSION:    2022-08-06
+VERSION:    2022-09-08
 
 */
 
@@ -253,7 +253,7 @@ IF (@object_id IS NULL) BEGIN;
     --- Output the results in a fancypants ASCII graph:
     SELECT (CASE WHEN o._ordinal=0 THEN s.[name] ELSE N'' END) AS [Schema],
            ISNULL((CASE WHEN x._ordinal=0 THEN o.[type_desc] ELSE N'' END), N'') AS [Object type],
-           ISNULL((CASE WHEN x._ordinal=0 THEN s.[name]+N'.'+o.[Name] WHEN x._ordinal=1 AND x._count>1 THEN N'/' WHEN x._ordinal=x._count THEN N'\' ELSE N'|' END), N'') AS [Object],
+           ISNULL((CASE WHEN x._ordinal=0 THEN s.[name]+N'.'+o.[name] WHEN x._ordinal=1 AND x._count>1 THEN N'/' WHEN x._ordinal=x._count THEN N'\' ELSE N'|' END), N'') AS [Object],
            (CASE WHEN x._ordinal=0           THEN COALESCE(REPLACE(CONVERT(varchar(20), CAST(o.line_count AS money), 1), '.00', '')+' lines',
                                                            REPLACE(CONVERT(varchar(20), CAST(o.row_count  AS money), 1), '.00', '')+' rows', '')
                  WHEN x.index_id IS NOT NULL THEN COALESCE(REPLACE(CONVERT(varchar(20), CAST(x.row_count  AS money), 1), '.00', '')+' rows', '')
