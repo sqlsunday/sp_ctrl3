@@ -36,7 +36,7 @@ SHORTCUT:   In SQL Server Management Studio, go to Tools -> Options
             schema (with a dot) need to be enclosed in quotes for this
             to work in older versions of SSMS.
 
-VERSION:    2022-09-08
+VERSION:    2022-10-11
 
 */
 
@@ -1299,11 +1299,14 @@ IF (@has_indexes=1)
             FROM (
                 SELECT [object_id], index_id, partition_number, data_compression_desc,
                        (CASE WHEN LAG(data_compression_desc, 1, N'') OVER (PARTITION BY [object_id], index_id ORDER BY partition_number)!=data_compression_desc THEN 1 ELSE 0 END) AS segment,
-                       COUNT(*) OVER () AS partition_count
+                       COUNT(*) OVER (PARTITION BY index_id) AS partition_count,
+                       (CASE WHEN MIN(data_compression_desc) OVER (PARTITION BY index_id)
+                                !=MAX(data_compression_desc) OVER (PARTITION BY index_id) THEN 1 ELSE 0 END) AS different_compression_settings
                 FROM @syspartitions
                 WHERE [object_id]=@object_id
                 ) AS x
             WHERE partition_count>1
+              AND different_compression_settings=1
             ) AS x
         WHERE data_compression_desc!=N'NONE'
         GROUP BY [object_id], index_id, [group], data_compression_desc, partition_count),
