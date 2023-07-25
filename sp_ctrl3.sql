@@ -1784,6 +1784,7 @@ IF (@has_data=1 AND @rowcount>0)
 	       (CASE WHEN ps.[partition_id] IS NULL THEN 'n/a' ELSE '' END)+ISNULL(STR(NULLIF(1.0*ps.row_overflow_used_page_count*8/1024, 0), 12, 2)+' MB', '') AS [Row-overflow used],
 	       (CASE WHEN ps.[partition_id] IS NULL THEN 'n/a' ELSE '' END)+ISNULL(STR(NULLIF(1.0*ps.lob_used_page_count*8/1024, 0), 12, 2)+' MB', '') AS [Out-of-row used],
 	       (CASE WHEN ps.[partition_id] IS NULL THEN 'n/a' ELSE '' END)+ISNULL(STR(NULLIF(1.0*ps.used_page_count*8/1024, 0), 12, 2)+' MB', '') AS [Total used],
+	       (CASE WHEN ps.[partition_id] IS NULL THEN 'n/a' ELSE '' END)+ISNULL(STR(NULLIF(100.0*ps.used_page_count/NULLIF(ps.reserved_page_count, 0), 0), 12, 2)+' %', '') AS [Total used %],
 	       (CASE WHEN ps.[partition_id] IS NULL THEN 'n/a' ELSE '' END)+ISNULL(STR(NULLIF(1.0*ps.used_page_count*8*1024/NULLIF(ISNULL(ps.row_count, p.[rows]), 0), 0), 12, 1)+' B', '') AS [Avg. row size],
            ISNULL(STR(NULLIF(1.0*cs1.size_in_bytes/1024/1024, 0), 12, 2)+' MB', '') AS [CS open],
            ISNULL(STR(NULLIF(1.0*cs2.size_in_bytes/1024/1024, 0), 12, 2)+' MB', '') AS [CS closed],
