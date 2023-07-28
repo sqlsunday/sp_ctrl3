@@ -36,7 +36,7 @@ SHORTCUT:   In SQL Server Management Studio, go to Tools -> Options
             schema (with a dot) need to be enclosed in quotes for this
             to work in older versions of SSMS.
 
-VERSION:    2023-07-25
+VERSION:    2023-07-28
 
 */
 
@@ -397,6 +397,7 @@ DECLARE @syscolumns TABLE (
     default_name      sysname COLLATE database_default NULL,
     default_is_system_named bit NULL,
     current_value     sql_variant NULL,
+    max_alloc_size    int NULL,
     generated_always_type_desc nvarchar(60) COLLATE database_default NULL,
     is_hidden         bit NULL,
     PRIMARY KEY CLUSTERED ([object_id], column_id)
@@ -691,11 +692,36 @@ SELECT c.[object_id], c.column_id, c.[name], c.user_type_id, c.system_type_id,
        c.collation_name, c.is_ansi_padded, c.xml_collection_id, c.default_object_id,
        ic.seed_value, ic.increment_value, ISNULL(cc.[definition], d.[definition]), cc.is_persisted,
        t.[name] AS [type_name], d.[name] AS default_name,
-       d.is_system_named AS default_is_system_named, NULL AS current_value, '+@temp+N'
+       d.is_system_named AS default_is_system_named, NULL AS current_value,
+       (CASE WHEN st.[name]IN (N''bit'', N''tinyint'') THEN 1
+             WHEN st.[name]=N''smallint'' THEN 2
+             WHEN st.[name]=N''date'' THEN 3
+             WHEN st.[name] IN (N''int'', N''smalldatetime'', N''smallmoney'') THEN 4
+             WHEN st.[name] IN (N''bigint'', N''money'', N''timestamp'', N''datetime'') THEN 8
+             WHEN st.[name]=N''datetime2'' AND c.scale BETWEEN 1 AND 2 THEN 6
+             WHEN st.[name]=N''datetime2'' AND c.scale BETWEEN 3 AND 4 THEN 7
+             WHEN st.[name]=N''datetime2'' AND c.scale BETWEEN 5 AND 7 THEN 8
+             WHEN st.[name]=N''datetimeoffset'' AND c.scale BETWEEN 0 AND 2 THEN 8
+             WHEN st.[name]=N''datetimeoffset'' AND c.scale BETWEEN 3 AND 4 THEN 9
+             WHEN st.[name]=N''datetimeoffset'' AND c.scale BETWEEN 5 AND 7 THEN 10
+             WHEN st.[name] IN (N''decimal'', N''numeric'') AND c.[precision] BETWEEN 1 AND 9 THEN 5
+             WHEN st.[name] IN (N''decimal'', N''numeric'') AND c.[precision] BETWEEN 10 AND 19 THEN 9
+             WHEN st.[name] IN (N''decimal'', N''numeric'') AND c.[precision] BETWEEN 20 AND 28 THEN 13
+             WHEN st.[name] IN (N''decimal'', N''numeric'') AND c.[precision] BETWEEN 29 AND 38 THEN 17
+             WHEN st.[name] IN (N''real'', N''float'') AND c.[precision]<=24 THEN 4
+             WHEN st.[name] IN (N''real'', N''float'') AND c.[precision]>24 THEN 8
+             WHEN st.[name]=N''time'' AND c.[scale] BETWEEN 0 AND 2 THEN 3
+             WHEN st.[name]=N''time'' AND c.[scale] BETWEEN 3 AND 4 THEN 4
+             WHEN st.[name]=N''time'' AND c.[scale] BETWEEN 5 AND 7 THEN 5
+             WHEN st.[name] IN (N''binary'', N''varbinary'', N''char'', N''nchar'', N''varchar'', N''nvarchar'', N''sysname'') THEN NULLIF(c.max_length, -1)
+             WHEN st.[name]=N''uniqueidentifier'' THEN 16
+             END) AS max_alloc_size,
+       '+@temp+N'
 FROM '+@database+N'.sys.columns AS c
 LEFT JOIN '+@database+N'.sys.identity_columns AS ic ON c.[object_id]=ic.[object_id] AND c.column_id=ic.column_id
 LEFT JOIN '+@database+N'.sys.computed_columns AS cc ON c.[object_id]=cc.[object_id] AND c.column_id=cc.column_id
 LEFT JOIN '+@database+N'.sys.types AS t ON c.user_type_id=t.user_type_id
+LEFT JOIN '+@database+N'.sys.types AS st ON c.system_type_id=st.user_type_id
 LEFT JOIN '+@database+N'.sys.default_constraints AS d ON d.[object_id]=c.default_object_id');
 
 BEGIN TRY;
@@ -722,7 +748,7 @@ BEGIN TRY;
             (CASE WHEN s.is_cached=0 THEN N'' NOCACHE''
                   WHEN s.is_cached=1 THEN ISNULL(N''CACHE ''+CAST(s.cache_size AS nvarchar(10)), '''')
                   END) AS [definition], 0 AS is_persisted,
-           t.[name] AS [type_name], NULL AS default_name, 1 AS default_is_system_named, s.current_value, NULL, NULL
+           t.[name] AS [type_name], NULL AS default_name, 1 AS default_is_system_named, s.current_value, NULL, NULL, NULL
     FROM '+@database+N'.sys.sequences AS s
     LEFT JOIN '+@database+N'.sys.types AS t ON s.user_type_id=t.user_type_id
     LEFT JOIN '+@database+N'.sys.types AS st ON s.system_type_id=st.user_type_id
@@ -1213,22 +1239,23 @@ IF (@has_cols_or_params=1) BEGIN;
 		   (CASE WHEN obj.[type]='SO' THEN N'Current value '+CAST(col.current_value AS nvarchar(40))
                  WHEN ROW_NUMBER() OVER (ORDER BY col.is_output, COALESCE(col.parameter_id, col.column_id+999))=COUNT(*) OVER (PARTITION BY (SELECT NULL)) THEN N'' ELSE N',' END) AS [ ],
            ISNULL(N'--> '+ref.[name], N'') AS [References],
-           ISNULL(N'-- '+CAST(ep.[value] AS nvarchar(max)), N'') AS [Description]
+           ISNULL(N'-- '+CAST(ep.[value] AS nvarchar(max)), N'') AS [Description],
+           ISNULL(N'-- '+CAST(col.max_alloc_size AS nvarchar(20))+N' bytes', N'') AS [Max storage]
 	FROM (SELECT column_id, CAST(NULL AS int) AS parameter_id, name, user_type_id, system_type_id,
 		         max_length, [precision], scale, is_sparse, is_nullable, collation_name,
 		         is_ansi_padded, xml_collection_id, default_object_id, CAST(NULL AS bit) AS is_output,
                  CAST(NULL AS bit) AS is_readonly, CAST(NULL AS bit) AS is_table_type,
 		         seed_value, increment_value, [definition], is_persisted, [type_name],
 		         default_name, default_is_system_named, CAST(NULL AS varchar(max)) AS tbl_type_cols,
-                 current_value, generated_always_type_desc, is_hidden
+                 current_value, max_alloc_size, generated_always_type_desc, is_hidden
 	      FROM @syscolumns
 	      WHERE [object_id]=@object_id
-	      UNION ALL
+          UNION ALL
 	      SELECT CAST(NULL AS int) AS column_id, parameter_id, [name], user_type_id, system_type_id,
 		         max_length, [precision], scale, NULL, is_nullable, NULL,
 		         NULL, xml_collection_id, NULL, is_output, is_readonly,
                  is_table_type, NULL, NULL, NULL, NULL, [type_name], NULL, NULL, tbl_type_cols,
-                 NULL AS current_value, NULL AS generated_always_type_desc, NULL AS is_hidden
+                 NULL AS current_value, NULL AS max_alloc_size, NULL AS generated_always_type_desc, NULL AS is_hidden
 	      FROM @sysparameters
 	      ) AS col
     OUTER APPLY (
@@ -1246,9 +1273,17 @@ IF (@has_cols_or_params=1) BEGIN;
 
     UNION ALL
 
+    --- Add space potential space requirement for uniqifiers:
+    SELECT N'', N'', N'', N'', N'', N'', N'', N'', N'', N'-- 4 bytes (uniquifier)'
+    FROM @sysindexes
+    WHERE [object_id]=@object_id AND index_id IN (0, 1) AND is_unique=0
+
+    UNION ALL
+
+    --- Add temporal table syntax:
     SELECT N'', N'', N', PERIOD FOR SYSTEM_TIME ('+
         MAX((CASE WHEN generated_always_type_desc='AS_ROW_START' THEN [name] ELSE N'' END))+N', '+
-        MAX((CASE WHEN generated_always_type_desc='AS_ROW_END' THEN [name] ELSE N'' END))+N')', N'', N'', N'', N'', N'', N''
+        MAX((CASE WHEN generated_always_type_desc='AS_ROW_END' THEN [name] ELSE N'' END))+N')', N'', N'', N'', N'', N'', N'', N''
 	FROM @syscolumns
 	WHERE [object_id]=@object_id
       AND generated_always_type_desc IN (N'AS_ROW_START', N'AS_ROW_END')
