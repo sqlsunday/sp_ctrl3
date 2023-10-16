@@ -36,7 +36,7 @@ SHORTCUT:   In SQL Server Management Studio, go to Tools -> Options
             schema (with a dot) need to be enclosed in quotes for this
             to work in older versions of SSMS.
 
-VERSION:    2023-07-28
+VERSION:    2023-10-16
 
 */
 
@@ -562,6 +562,7 @@ DECLARE @sysdatabasepermissions TABLE (
 );
 
 DECLARE @signatures TABLE (
+    src                 nvarchar(20) COLLATE database_default NOT NULL,
     [name]              sysname COLLATE database_default NOT NULL,
     encryption_type_desc varchar(20) COLLATE database_default NULL,
     [type_desc]         nvarchar(60) COLLATE database_default NOT NULL,
@@ -969,14 +970,14 @@ FROM '+@database+N'.sys.database_permissions');
 
 INSERT INTO @signatures
 EXEC(N'
-SELECT ask.[name], (CASE ask.pvt_key_encryption_type WHEN N''PW'' THEN ''PASSWORD=N''''*****'''''' END) AS encryption_type_desc, sg.[type] AS [type_desc], sg.[entity_id] AS major_id
+SELECT N''ASYMMETRIC KEY'' AS src, ask.[name], (CASE ask.pvt_key_encryption_type WHEN N''PW'' THEN ''PASSWORD=N''''*****'''''' END) AS encryption_type_desc, sg.[type] AS [type_desc], sg.[entity_id] AS major_id
 FROM '+@database+N'.sys.asymmetric_keys AS ask
 CROSS APPLY '+@database+N'.sys.fn_check_object_signatures (N''asymmetric key'', ask.thumbprint) AS sg
 INNER JOIN '+@database+N'.sys.objects AS o ON sg.[entity_id]=o.[object_id] AND sg.[type]=o.[type_desc]
 WHERE sg.is_signed=1
   AND o.[object_id]='+@object_id_str+N';
 
-SELECT crt.[name], (CASE crt.pvt_key_encryption_type WHEN N''PW'' THEN ''PASSWORD=N''''*****'''''' END) AS encryption_type_desc, sg.[type] AS [type_desc], sg.[entity_id] AS major_id
+SELECT N''CERTIFICATE'' AS src, crt.[name], (CASE crt.pvt_key_encryption_type WHEN N''PW'' THEN ''PASSWORD=N''''*****'''''' END) AS encryption_type_desc, sg.[type] AS [type_desc], sg.[entity_id] AS major_id
 FROM '+@database+N'.sys.certificates AS crt
 CROSS APPLY '+@database+N'.sys.fn_check_object_signatures (N''certificate'', crt.thumbprint) AS sg
 INNER JOIN '+@database+N'.sys.objects AS o ON sg.[entity_id]=o.[object_id] AND sg.[type]=o.[type_desc]
@@ -1776,7 +1777,7 @@ IF (@has_permissions=1)
     SELECT N'ADD SIGNATURE' AS [Grant/Deny], N'' AS [Permission],
            N'TO '+sch.[name]+N'.'+obj.[name] AS [Object],
            N'' AS [Principal],
-           N'BY '+sig.[name]+ISNULL(N' WITH '+sig.encryption_type_desc, N'')+';' AS [Options]
+           N'BY '+sig.src+N' '+sig.[name]+ISNULL(N' WITH '+sig.encryption_type_desc, N'')+';' AS [Options]
     FROM @signatures AS sig
     INNER JOIN @sysobjects AS obj ON sig.major_id=obj.[object_id] AND sig.[type_desc]=obj.[type_desc]
 	INNER JOIN @sysschemas AS sch ON obj.[schema_id]=sch.[schema_id];
