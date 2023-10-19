@@ -36,7 +36,7 @@ SHORTCUT:   In SQL Server Management Studio, go to Tools -> Options
             schema (with a dot) need to be enclosed in quotes for this
             to work in older versions of SSMS.
 
-VERSION:    2023-10-16
+VERSION:    2023-10-19
 
 */
 
@@ -1205,8 +1205,8 @@ IF (@has_cols_or_params=1) BEGIN;
 	       (CASE WHEN col.is_persisted IS NULL THEN
                col.[type_name]+(CASE
 			       WHEN col.user_type_id!=col.system_type_id THEN ''
-			       WHEN col.[type_name] LIKE N'n%char%' OR col.[type_name] LIKE N'n%binary%' THEN N'('+ISNULL(CAST(NULLIF(col.max_length, -1)/2 AS varchar(max)), N'max')+N')'
-			       WHEN col.[type_name] LIKE N'%char%' OR col.[type_name] LIKE N'%binary%'   THEN N'('+ISNULL(CAST(NULLIF(col.max_length, -1)   AS varchar(max)), N'max')+N')'
+			       WHEN col.[type_name] LIKE N'n%char%' THEN N'('+ISNULL(CAST(NULLIF(col.max_length, -1)/2 AS varchar(max)), N'max')+N')'
+			       WHEN col.[type_name] LIKE N'%char%' OR col.[type_name] LIKE N'%binary%' THEN N'('+ISNULL(CAST(NULLIF(col.max_length, -1)   AS varchar(max)), N'max')+N')'
 			       WHEN col.[type_name] IN (N'numeric', N'decimal') THEN N'('+CAST(col.[precision] AS varchar(max))+N', '+CAST(col.scale AS varchar(max))+N')'
 			       WHEN col.[type_name]=N'datetime2' THEN N'('+CAST(col.scale AS varchar(max))+N')'
 			       WHEN col.[type_name]=N'xml' THEN ISNULL(N'('+xsc_sch.[name]+N'.'+xsc.[name]+N')', N'')
