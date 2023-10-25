@@ -512,6 +512,7 @@ DECLARE @syspartitions TABLE (
     partition_number int NOT NULL,
     [rows]           bigint NULL,
     data_compression_desc nvarchar(120) COLLATE database_default NOT NULL,
+    xml_compression_desc varchar(3) COLLATE database_default NULL,
     boundary_value_on_right bit NULL,
     boundary         nvarchar(max) NULL,
     boundary_type    sysname NULL,
@@ -877,9 +878,9 @@ BEGIN CATCH;
 	PRINT 'Problem compiling expression dependencies: '+ERROR_MESSAGE();
 END CATCH;
 
-INSERT INTO @syspartitions
-EXEC(N'
-SELECT p.[partition_id], p.[object_id], p.index_id, p.partition_number, p.[rows], p.data_compression_desc, pf.boundary_value_on_right, prv.boundary, prv.boundary_type, 0
+SET @temp=N'
+SELECT p.[partition_id], p.[object_id], p.index_id, p.partition_number, p.[rows], p.data_compression_desc,
+       '+(CASE WHEN @compatibility_level>=160 THEN N'p.xml_compression_desc' ELSE N'NULL' END)+N', pf.boundary_value_on_right, prv.boundary, prv.boundary_type, 0
 FROM '+@database+N'.sys.partitions AS p
 LEFT JOIN '+@database+N'.sys.indexes AS i ON p.[object_id]=i.[object_id] AND p.index_id=i.index_id AND p.[object_id]='+@object_id_str+N'
 LEFT JOIN '+@database+N'.sys.partition_schemes AS ps ON i.data_space_id=ps.data_space_id
@@ -892,8 +893,10 @@ LEFT JOIN (
             ELSE CAST([value] AS nvarchar(max)) END) AS boundary
     FROM '+@database+N'.sys.partition_range_values
     WHERE parameter_id=1
-    ) AS prv ON pf.function_id=prv.function_id AND p.partition_number=prv.boundary_id');
-
+    ) AS prv ON pf.function_id=prv.function_id AND p.partition_number=prv.boundary_id'
+    
+INSERT INTO @syspartitions
+EXEC(@temp);
 
 -- Does this partition have a discrete boundary, i.e. can it only contain a single boundary value?
 -- This applies to discrete datatypes, like integers, dates, etc.
@@ -1151,7 +1154,8 @@ SELECT (CASE WHEN @is_tempdb=1 THEN '' ELSE sch.[name] END) AS [Schema],
                 (CASE WHEN obj.is_memory_optimized=1
                       THEN N', MEMORY_OPTIMIZED=ON, DURABILITY='+obj.durability_desc
                       ELSE N'' END)+
-                ISNULL(N', DATA_COMPRESSION='+NULLIF(NULLIF(p.data_compression_desc, N'NONE'), N'COLUMNSTORE'), N''),
+                ISNULL(N', DATA_COMPRESSION='+NULLIF(NULLIF(p.data_compression_desc, N'NONE'), N'COLUMNSTORE'), N'')+
+                ISNULL(N', XML_COMPRESSION='+NULLIF(p.xml_compression_desc, 'OFF'), N''),
         	3, 1000), N'')+N')', N'') AS [Options],
        (CASE WHEN obj.is_change_tracked=1 THEN (CASE WHEN obj.is_track_columns_updated_on=1 THEN 'Column updates' ELSE 'Table' END) ELSE '' END) AS [Change tracking],
        ISNULL(CAST(NULLIF(obj.min_valid_version, 0) AS varchar(20)), '') AS [CT version],
@@ -1354,7 +1358,36 @@ IF (@has_indexes=1)
                                       WHERE p2.[object_id]=p2.[object_id] AND p2.index_id=p1.index_id AND p2.data_compression_desc=p1.data_compression_desc
                                       ORDER BY [group] FOR XML PATH(''), TYPE) AS varchar(max)), 3, 1000), N'ALL')+N')', N'') AS [definition]
         FROM part AS p1
-        GROUP BY [object_id], index_id, data_compression_desc)
+        GROUP BY [object_id], index_id, data_compression_desc),
+
+    xpart AS (
+        SELECT [object_id], index_id, [group], xml_compression_desc,
+               (CASE WHEN partition_count=COUNT(*) THEN N'ALL' ELSE CAST(MIN(partition_number) AS varchar(20))+ISNULL(N' TO '+CAST(NULLIF(MAX(partition_number), MIN(partition_number)) AS varchar(20)), N'') END) AS partition_list
+        FROM (
+            SELECT [object_id], index_id, partition_number, xml_compression_desc, partition_count, SUM(segment) OVER (PARTITION BY [object_id], index_id ORDER BY partition_number ROWS UNBOUNDED PRECEDING) AS [group]
+            FROM (
+                SELECT [object_id], index_id, partition_number, xml_compression_desc,
+                       (CASE WHEN LAG(xml_compression_desc, 1, N'') OVER (PARTITION BY [object_id], index_id ORDER BY partition_number)!=xml_compression_desc THEN 1 ELSE 0 END) AS segment,
+                       COUNT(*) OVER (PARTITION BY index_id) AS partition_count,
+                       (CASE WHEN MIN(xml_compression_desc) OVER (PARTITION BY index_id)
+                                !=MAX(xml_compression_desc) OVER (PARTITION BY index_id) THEN 1 ELSE 0 END) AS different_compression_settings
+                FROM @syspartitions
+                WHERE [object_id]=@object_id
+                ) AS x
+            WHERE partition_count>1
+              AND different_compression_settings=1
+            ) AS x
+        WHERE xml_compression_desc!=N'OFF'
+        GROUP BY [object_id], index_id, [group], xml_compression_desc, partition_count),
+
+    xpart2 AS (
+        SELECT [object_id], index_id, N'XML_COMPRESSION='+xml_compression_desc+ISNULL(N' ON PARTITIONS ('+
+               NULLIF(SUBSTRING(CAST((SELECT N', '+partition_list
+                                      FROM xpart AS p2
+                                      WHERE p2.[object_id]=p2.[object_id] AND p2.index_id=p1.index_id AND p2.xml_compression_desc=p1.xml_compression_desc
+                                      ORDER BY [group] FOR XML PATH(''), TYPE) AS varchar(max)), 3, 1000), N'ALL')+N')', N'') AS [definition]
+        FROM xpart AS p1
+        GROUP BY [object_id], index_id, xml_compression_desc)
 
     SELECT (CASE WHEN ix.is_primary_key=0 AND ix.is_unique_constraint=0 AND ix.is_unique=1 THEN N'UNIQUE ' ELSE N'' END)+
            (CASE WHEN ix.is_primary_key=0 AND ix.is_unique_constraint=0 AND ix.[type]=1 THEN N'CLUSTERED ' ELSE N'' END)+
@@ -1370,6 +1403,8 @@ IF (@has_indexes=1)
 	   ISNULL(N'WITH ('+NULLIF(SUBSTRING(
 	              ISNULL(', DATA_COMPRESSION='+NULLIF(NULLIF(p.data_compression_desc, N'NONE'), N'COLUMNSTORE'), N'')+
                   ISNULL(CAST((SELECT N', '+[definition] FROM part2 WHERE part2.[object_id]=ix.[object_id] AND part2.index_id=ix.index_id FOR XML PATH(N''), TYPE) AS varchar(max)), N'')+
+                  ISNULL(', XML_COMPRESSION='+NULLIF(p.xml_compression_desc, N'OFF'), N'')+
+                  ISNULL(CAST((SELECT N', '+[definition] FROM xpart2 WHERE xpart2.[object_id]=ix.[object_id] AND xpart2.index_id=ix.index_id FOR XML PATH(N''), TYPE) AS varchar(max)), N'')+
                   ISNULL(N', COMPRESSION_DELAY='+CAST(ix.[compression_delay] AS varchar(10))+N' MINUTES', '')+
             (CASE WHEN ix.[type] IN (1, 2)
 	              THEN (CASE WHEN ix.fill_factor!=@default_fill_factor THEN N', FILLFACTOR='+ISNULL(NULLIF(CAST(ix.fill_factor AS varchar(max)), N'0'), N'100') ELSE N'' END)+
