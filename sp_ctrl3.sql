@@ -36,7 +36,7 @@ SHORTCUT:   In SQL Server Management Studio, go to Tools -> Options
             schema (with a dot) need to be enclosed in quotes for this
             to work in older versions of SSMS.
 
-VERSION:    2023-10-25
+VERSION:    2023-11-17
 
 */
 
@@ -67,6 +67,7 @@ DECLARE @object_id              int,
         @has_policies           bit,
 		@is_azure_sql_db		bit=(CASE WHEN CAST(SERVERPROPERTY(N'Edition') AS varchar(100)) LIKE N'%Azure%' THEN 1 ELSE 0 END),
 	    @is_tempdb              bit=0,
+        @synonym_references     nvarchar(1035)='',
         @module_definition      nvarchar(max),
         @uses_ansi_nulls        bit,
 	    @uses_quoted_identifier bit,
@@ -84,23 +85,52 @@ DECLARE @inf  nchar(1)=NCHAR(8734),          --- Infinity symbol
         @lf   nchar(1)=NCHAR(10),            --- Line feed
         @cr   nchar(1)=NCHAR(13);            --- Carriage return
 
-SET @object_id=OBJECT_ID(@objname);
-IF (@objname LIKE N'#%')
-    SELECT @is_tempdb=1, @object_id=OBJECT_ID(N'tempdb.dbo.'+@objname);
+--- If this is a synonym, follow it until we reach a base object.
+--- (SQL Server does not currently allow recursive synonyms, but just in case.)
+WHILE (@synonym_references IS NOT NULL) BEGIN;
 
-IF (@object_id IS NULL)
-    SELECT @object_id=tt.type_table_object_id
-    FROM sys.table_types AS tt
-    WHERE tt.user_type_id=TYPE_ID(@objname);
+    SET @object_id=OBJECT_ID(@objname);
+    IF (@objname LIKE N'#%')
+        SELECT @is_tempdb=1, @object_id=OBJECT_ID(N'tempdb.dbo.'+@objname);
 
-SELECT @database_id=database_id, @database=QUOTENAME([name]), @compatibility_level=[compatibility_level]
-FROM sys.databases
-WHERE @objname LIKE N'#%' AND [name]=N'tempdb' OR
-      @objname LIKE N'\[%\].%' ESCAPE N'\' AND @objname LIKE N'%.%.%' AND [name]=SUBSTRING(@objname, 2, NULLIF(CHARINDEX(N'].', @objname), 0)-2) OR
-      @objname NOT LIKE N'[\[#]%' ESCAPE N'\' AND @objname LIKE N'%.%.%' AND [name]=LEFT(@objname, NULLIF(CHARINDEX(N'.', @objname), 0)-1) OR
-      @objname NOT LIKE N'%.%.%' AND @objname NOT LIKE N'#%' AND database_id=DB_ID();
+    IF (@object_id IS NULL)
+        SELECT @object_id=tt.type_table_object_id
+        FROM sys.table_types AS tt
+        WHERE tt.user_type_id=TYPE_ID(@objname);
 
-SET @object_id_str=CAST(@object_id AS nvarchar(20));
+    IF (@object_id IS NULL)
+        SET @synonym_references=NULL;
+
+    SELECT @database_id=database_id, @database=QUOTENAME([name]), @compatibility_level=[compatibility_level]
+    FROM sys.databases
+    WHERE @objname LIKE N'#%' AND [name]=N'tempdb' OR
+        @objname LIKE N'\[%\].%' ESCAPE N'\' AND @objname LIKE N'%.%.%' AND [name]=SUBSTRING(@objname, 2, NULLIF(CHARINDEX(N'].', @objname), 0)-2) OR
+        @objname NOT LIKE N'[\[#]%' ESCAPE N'\' AND @objname LIKE N'%.%.%' AND [name]=LEFT(@objname, NULLIF(CHARINDEX(N'.', @objname), 0)-1) OR
+        @objname NOT LIKE N'%.%.%' AND @objname NOT LIKE N'#%' AND database_id=DB_ID();
+
+    SET @object_id_str=CAST(@object_id AS nvarchar(20));
+
+    --- Is this a synonym, and if so, what base object does it reference?
+    SET @synonym_references=NULL;
+    SET @temp=N'SELECT @synonym_references=base_object_name FROM '+@database+N'.sys.synonyms WHERE [object_id]=@object_id;';
+    EXECUTE sys.sp_executesql
+        @temp,
+        N'@object_id int, @synonym_references nvarchar(1035) OUTPUT',
+        @object_id=@object_id,
+        @synonym_references=@synonym_references OUTPUT;
+
+    --- If yes, show header, update @objname, and restart the loop.
+    IF (@synonym_references IS NOT NULL) BEGIN;
+        SELECT OBJECT_SCHEMA_NAME(@object_id, @database_id) AS [Schema],
+               OBJECT_NAME(@object_id, @database_id) AS [Object],
+               N'Synonym' AS [Type],
+               @object_id AS [object_id],
+               @synonym_references AS [References];
+
+        SET @objname=@synonym_references COLLATE database_default;
+    END;
+
+END;
 
 -------------------------------------------------------------------------------
 --- If database object isn't found, try a plaintext search instead.
@@ -147,7 +177,7 @@ IF (@object_id IS NULL) BEGIN;
                 PATINDEX(N'%['+NCHAR(10)+NCHAR(13)+N']%', SUBSTRING(rcte.remain, x1.keyword_offset, LEN(rcte.remain))+NCHAR(10))-1
             )) AS x2(left_of_keyword, offset_to_next_line)                
         WHERE x1.keyword_offset>0)
-        
+
     INSERT INTO @search_results ([type_desc], [schema_id], major_id, line, [Definition], line_count)
     SELECT o.[type_desc], o.[schema_id], o.[object_id] AS major_id, rcte.line, rcte.[sql] AS [Definition], rcte.line_count
     FROM rcte
@@ -159,7 +189,7 @@ IF (@object_id IS NULL) BEGIN;
     --- Columns or computed column definitions:
     INSERT INTO @search_results ([type_desc], [schema_id], major_id, minor_id, [Definition])
     SELECT t.[type_desc], t.[schema_id], t.[object_id] AS major_id, c.column_id AS minor_id,
-           COALESCE(cc.[name]+N' AS '+cc.[definition], c.[name], N'') AS [Definition]
+           COALESCE(cc.[name] COLLATE database_default+N' AS '+cc.[definition], c.[name], N'') AS [Definition]
     FROM sys.tables AS t
     INNER JOIN sys.columns AS c ON t.[object_id]=c.[object_id] AND c.[name] LIKE N'%'+@objname+N'%'
     LEFT JOIN sys.computed_columns AS cc ON t.[object_id]=cc.[object_id] AND cc.[definition] LIKE N'%'+@objname+N'%'
@@ -971,22 +1001,27 @@ SELECT class, class_desc, major_id, minor_id, grantee_principal_id,
        grantor_principal_id, [type], [permission_name], [state], state_desc
 FROM '+@database+N'.sys.database_permissions');
 
-INSERT INTO @signatures
-EXEC(N'
-SELECT N''ASYMMETRIC KEY'' AS src, ask.[name], (CASE ask.pvt_key_encryption_type WHEN N''PW'' THEN ''PASSWORD=N''''*****'''''' END) AS encryption_type_desc, sg.[type] AS [type_desc], sg.[entity_id] AS major_id
-FROM '+@database+N'.sys.asymmetric_keys AS ask
-CROSS APPLY '+@database+N'.sys.fn_check_object_signatures (N''asymmetric key'', ask.thumbprint) AS sg
-INNER JOIN '+@database+N'.sys.objects AS o ON sg.[entity_id]=o.[object_id] AND sg.[type]=o.[type_desc]
-WHERE sg.is_signed=1
-  AND o.[object_id]='+@object_id_str+N';
+BEGIN TRY;
+    INSERT INTO @signatures
+    EXEC(N'
+    SELECT N''ASYMMETRIC KEY'' AS src, ask.[name], (CASE ask.pvt_key_encryption_type WHEN N''PW'' THEN ''PASSWORD=N''''*****'''''' END) AS encryption_type_desc, sg.[type] AS [type_desc], sg.[entity_id] AS major_id
+    FROM '+@database+N'.sys.asymmetric_keys AS ask
+    CROSS APPLY '+@database+N'.sys.fn_check_object_signatures (N''asymmetric key'', ask.thumbprint) AS sg
+    INNER JOIN '+@database+N'.sys.objects AS o ON sg.[entity_id]=o.[object_id] AND sg.[type]=o.[type_desc]
+    WHERE sg.is_signed=1
+    AND o.[object_id]='+@object_id_str+N';
 
-SELECT N''CERTIFICATE'' AS src, crt.[name], (CASE crt.pvt_key_encryption_type WHEN N''PW'' THEN ''PASSWORD=N''''*****'''''' END) AS encryption_type_desc, sg.[type] AS [type_desc], sg.[entity_id] AS major_id
-FROM '+@database+N'.sys.certificates AS crt
-CROSS APPLY '+@database+N'.sys.fn_check_object_signatures (N''certificate'', crt.thumbprint) AS sg
-INNER JOIN '+@database+N'.sys.objects AS o ON sg.[entity_id]=o.[object_id] AND sg.[type]=o.[type_desc]
-WHERE sg.is_signed=1
-  AND o.[object_id]='+@object_id_str+';
-');
+    SELECT N''CERTIFICATE'' AS src, crt.[name], (CASE crt.pvt_key_encryption_type WHEN N''PW'' THEN ''PASSWORD=N''''*****'''''' END) AS encryption_type_desc, sg.[type] AS [type_desc], sg.[entity_id] AS major_id
+    FROM '+@database+N'.sys.certificates AS crt
+    CROSS APPLY '+@database+N'.sys.fn_check_object_signatures (N''certificate'', crt.thumbprint) AS sg
+    INNER JOIN '+@database+N'.sys.objects AS o ON sg.[entity_id]=o.[object_id] AND sg.[type]=o.[type_desc]
+    WHERE sg.is_signed=1
+    AND o.[object_id]='+@object_id_str+';
+    ');
+END TRY
+BEGIN CATCH;
+    PRINT 'Could not view signatures DMV.';
+END CATCH;
 
 BEGIN TRY;
     INSERT INTO @syssecuritypolicies
