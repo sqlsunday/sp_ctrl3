@@ -36,7 +36,7 @@ SHORTCUT:   In SQL Server Management Studio, go to Tools -> Options
             schema (with a dot) need to be enclosed in quotes for this
             to work in older versions of SSMS.
 
-VERSION:    2023-11-17
+VERSION:    2023-11-25
 
 */
 
@@ -181,7 +181,7 @@ IF (@object_id IS NULL) BEGIN;
     INSERT INTO @search_results ([type_desc], [schema_id], major_id, line, [Definition], line_count)
     SELECT o.[type_desc], o.[schema_id], o.[object_id] AS major_id, rcte.line, rcte.[sql] AS [Definition], rcte.line_count
     FROM rcte
-    INNER JOIN sys.objects AS o ON rcte.[object_id]=o.[object_id]
+    INNER JOIN sys.all_objects AS o ON rcte.[object_id]=o.[object_id]
     WHERE rcte.[sql] IS NOT NULL
     OPTION (MAXRECURSION 0);
 
@@ -191,7 +191,7 @@ IF (@object_id IS NULL) BEGIN;
     SELECT t.[type_desc], t.[schema_id], t.[object_id] AS major_id, c.column_id AS minor_id,
            COALESCE(cc.[name] COLLATE database_default+N' AS '+cc.[definition], c.[name], N'') AS [Definition]
     FROM sys.tables AS t
-    INNER JOIN sys.columns AS c ON t.[object_id]=c.[object_id] AND c.[name] LIKE N'%'+@objname+N'%'
+    INNER JOIN sys.all_columns AS c ON t.[object_id]=c.[object_id] AND c.[name] LIKE N'%'+@objname+N'%'
     LEFT JOIN sys.computed_columns AS cc ON t.[object_id]=cc.[object_id] AND cc.[definition] LIKE N'%'+@objname+N'%'
     LEFT JOIN sys.extended_properties AS ep ON ep.class=1 AND ep.major_id=t.[object_id] AND ep.minor_id=c.column_id AND ep.[name]=N'Description'
     WHERE c.[name] LIKE N'%'+@objname+N'%' OR
@@ -205,9 +205,9 @@ IF (@object_id IS NULL) BEGIN;
            ISNULL(oc.[name]+N' ', N'')+N'CONSTRAINT '+c.[name]+N' DEFAULT '+c.[definition] AS [Definition]
     FROM sys.default_constraints AS c
     INNER JOIN sys.schemas AS s ON c.[schema_id]=s.[schema_id]
-    LEFT JOIN sys.objects AS o ON c.parent_object_id=o.[object_id]
+    LEFT JOIN sys.all_objects AS o ON c.parent_object_id=o.[object_id]
     LEFT JOIN sys.schemas AS os ON o.[schema_id]=os.[schema_id]
-    LEFT JOIN sys.columns AS oc ON c.parent_object_id=oc.[object_id] AND c.parent_column_id=oc.column_id
+    LEFT JOIN sys.all_columns AS oc ON c.parent_object_id=oc.[object_id] AND c.parent_column_id=oc.column_id
     WHERE c.[name] LIKE N'%'+@objname+N'%' OR
           c.[definition] LIKE N'%'+@objname+N'%';
 
@@ -218,9 +218,9 @@ IF (@object_id IS NULL) BEGIN;
            ISNULL(oc.[name]+N' ', N'')+N'CONSTRAINT '+c.[name]+N' CHECK '+c.[definition] AS [Definition]
     FROM sys.check_constraints AS c
     INNER JOIN sys.schemas AS s ON c.[schema_id]=s.[schema_id]
-    LEFT JOIN sys.objects AS o ON c.parent_object_id=o.[object_id]
+    LEFT JOIN sys.all_objects AS o ON c.parent_object_id=o.[object_id]
     LEFT JOIN sys.schemas AS os ON o.[schema_id]=os.[schema_id]
-    LEFT JOIN sys.columns AS oc ON c.parent_object_id=oc.[object_id] AND c.parent_column_id=oc.column_id
+    LEFT JOIN sys.all_columns AS oc ON c.parent_object_id=oc.[object_id] AND c.parent_column_id=oc.column_id
     WHERE c.[name] LIKE N'%'+@objname+N'%' OR
           c.[definition] LIKE N'%'+@objname+N'%';
 
@@ -236,7 +236,7 @@ IF (@object_id IS NULL) BEGIN;
             FROM sys.partitions AS p
             WHERE p.[object_id]=i.[object_id] AND p.index_id=i.index_id) AS row_count
     FROM sys.indexes AS i
-    INNER JOIN sys.objects AS o ON i.[object_id]=o.[object_id]
+    INNER JOIN sys.all_objects AS o ON i.[object_id]=o.[object_id]
     INNER JOIN sys.schemas AS s ON o.[schema_id]=s.[schema_id]
     WHERE i.[name] LIKE N'%'+@objname+N'%' OR
           i.filter_definition LIKE N'%'+@objname+N'%';
@@ -255,7 +255,7 @@ IF (@object_id IS NULL) BEGIN;
            (SELECT TOP (1) line_count
             FROM @search_results
             WHERE major_id=o.[object_id] AND line_count IS NOT NULL) AS line_count
-    FROM sys.objects AS o
+    FROM sys.all_objects AS o
     LEFT JOIN sys.extended_properties AS ep ON ep.class=1 AND ep.major_id=o.[object_id] AND ep.minor_id=0 AND ep.[name]=N'Description'
     WHERE o.parent_object_id=0 AND (
           o.[object_id] IN (SELECT major_id FROM @search_results)
@@ -699,7 +699,7 @@ SELECT ISNULL(tt.[schema_id], o.[schema_id]), o.[object_id], o.principal_id, o.[
        '+(CASE WHEN @compatibility_level>=120 THEN N'ISNULL(t.is_memory_optimized, 0), t.durability_desc' ELSE N'0, NULL' END)+N',
        '+(CASE WHEN @compatibility_level>=130 THEN N't.temporal_type_desc, t.history_table_id' ELSE N'NULL, NULL' END)+N',
        (CASE WHEN ct.[object_id] IS NOT NULL THEN 1 ELSE 0 END), ISNULL(ct.is_track_columns_updated_on, 0), ct.min_valid_version
-FROM '+@database+N'.sys.objects AS o
+FROM '+@database+N'.sys.all_objects AS o
 LEFT JOIN '+@database+N'.sys.tables AS t ON o.[object_id]=t.[object_id]
 LEFT JOIN '+@database+N'.sys.table_types AS tt ON tt.type_table_object_id=o.[object_id]
 LEFT JOIN '+@database+N'.sys.change_tracking_tables AS ct ON t.[object_id]=ct.[object_id]'
@@ -749,7 +749,7 @@ SELECT c.[object_id], c.column_id, c.[name], c.user_type_id, c.system_type_id,
              WHEN st.[name]=N''uniqueidentifier'' THEN 16
              END) AS max_alloc_size,
        '+@temp+N'
-FROM '+@database+N'.sys.columns AS c
+FROM '+@database+N'.sys.all_columns AS c
 LEFT JOIN '+@database+N'.sys.identity_columns AS ic ON c.[object_id]=ic.[object_id] AND c.column_id=ic.column_id
 LEFT JOIN '+@database+N'.sys.computed_columns AS cc ON c.[object_id]=cc.[object_id] AND c.column_id=cc.column_id
 LEFT JOIN '+@database+N'.sys.types AS t ON c.user_type_id=t.user_type_id
@@ -798,11 +798,11 @@ SELECT p.parameter_id, p.[name], p.user_type_id, p.system_type_id, p.max_length,
        p.scale, '+@temp+N', p.xml_collection_id, p.is_output, p.is_readonly, t.is_table_type,
        ISNULL(s.[name]+N''.'', N'''')+t.[name] AS [type_name],
 	   N''(''+SUBSTRING(CAST((SELECT N'', ''+ttc.[name]
-	                          FROM '+@database+N'.sys.columns AS ttc
+	                          FROM '+@database+N'.sys.all_columns AS ttc
 	                          WHERE ttc.[object_id]=tt.type_table_object_id
 	                          ORDER BY ttc.column_id
 	                          FOR XML PATH(N''''), TYPE) AS varchar(max)), 3, 8000)+N'')'' AS tbl_type_cols
-FROM '+@database+N'.sys.parameters AS p
+FROM '+@database+N'.sys.all_parameters AS p
 LEFT JOIN '+@database+N'.sys.types AS t ON p.user_type_id=t.user_type_id
 LEFT JOIN '+@database+N'.sys.table_types AS tt ON t.user_type_id=tt.user_type_id
 LEFT JOIN '+@database+N'.sys.schemas AS s ON t.is_table_type=1 AND t.[schema_id]=s.[schema_id]
