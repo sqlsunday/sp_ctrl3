@@ -36,7 +36,7 @@ SHORTCUT:   In SQL Server Management Studio, go to Tools -> Options
             schema (with a dot) need to be enclosed in quotes for this
             to work in older versions of SSMS.
 
-VERSION:    2023-11-25
+VERSION:    2023-02-24
 
 */
 
@@ -1343,7 +1343,8 @@ IF (@has_indexes=1)
 		       (CASE WHEN c.[name] LIKE N'[0-9]%' OR c.[name] LIKE N'%[^0-9a-z\_@]%' ESCAPE N'\' OR c.[name] IN (SELECT keyword FROM @reserved_keywords) THEN QUOTENAME(c.[name]) ELSE c.[name] END) AS name_plain
 		FROM @sysindexcolumns AS ic
 		INNER JOIN @syscolumns AS c ON ic.[object_id]=c.[object_id] AND ic.column_id=c.column_id
-		WHERE ic.[object_id]=@object_id),
+		WHERE ic.[object_id]=@object_id
+          AND (key_ordinal>0 OR is_included_column=1)),
 
 	     rcte AS (
 		SELECT index_id, is_included_column, ordinal,
