@@ -36,7 +36,7 @@ SHORTCUT:   In SQL Server Management Studio, go to Tools -> Options
             schema (with a dot) need to be enclosed in quotes for this
             to work in older versions of SSMS.
 
-VERSION:    2024-02-24
+VERSION:    2024-03-23
 
 */
 
@@ -778,7 +778,7 @@ BEGIN TRY;
             END)) AS nvarchar(40)), N'''')+
             (CASE WHEN s.is_cycling=1 THEN N'' CYCLE'' ELSE N'''' END)+
             (CASE WHEN s.is_cached=0 THEN N'' NOCACHE''
-                  WHEN s.is_cached=1 THEN ISNULL(N''CACHE ''+CAST(s.cache_size AS nvarchar(10)), '''')
+                  WHEN s.is_cached=1 THEN ISNULL(N''CACHE ''+CAST(s.cache_size AS nvarchar(20)), '''')
                   END) AS [definition], 0 AS is_persisted,
            t.[name] AS [type_name], NULL AS default_name, 1 AS default_is_system_named, s.current_value, NULL, NULL, NULL
     FROM '+@database+N'.sys.sequences AS s
@@ -1448,7 +1448,7 @@ IF (@has_indexes=1)
 	                   N', ALLOW_PAGE_LOCKS='+(CASE ix.[allow_page_locks] WHEN 1 THEN N'ON' ELSE N'OFF' END)+
 	                   (CASE WHEN ix.fill_factor!=0 THEN N', PAD_INDEX='+(CASE ix.is_padded WHEN 1 THEN N'ON' ELSE N'OFF' END) ELSE N'' END)
                   ELSE N'' END)+
-                  ISNULL(N', BUCKET_COUNT='+CAST(ix.[bucket_count] AS varchar(10)), N'')
+                  ISNULL(N', BUCKET_COUNT='+CAST(ix.[bucket_count] AS varchar(20)), N'')
             , 3, 10000), N'')+N')', N'') AS [Options],
 	   (CASE WHEN ix.index_id IS NOT NULL AND ds.is_default=0 THEN N'ON '+QUOTENAME(ds.[name])+ISNULL(N'('+c.[name]+N')', '') ELSE N'' END) AS [Data space],
            (SELECT ISNULL(REPLACE(REPLACE(CONVERT(nvarchar(100), CAST(SUM(sub.[rows]) AS money), 1), N',', N' '), N'.00', N'')+
@@ -1644,7 +1644,7 @@ IF (@has_references=1) BEGIN;
 	--- "parents" contains the first and second-order parent levels (r2 and r1),
 	--- where "parents" are referencing objects and "children" are the referenced objects.
 	WITH [rowcount] AS (
-		SELECT [object_id], N' ('+CAST(SUM([rows]) AS nvarchar(10))+N')' AS [rowcount]
+		SELECT [object_id], N' ('+CAST(SUM([rows]) AS nvarchar(20))+N')' AS [rowcount]
 		FROM @syspartitions
 		WHERE index_id IN (0, 1)
 		GROUP BY [object_id], index_id
