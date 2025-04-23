@@ -737,7 +737,7 @@ SELECT c.[object_id], c.column_id, c.[name], c.user_type_id, c.system_type_id,
              WHEN st.[name]=N''date'' THEN 3
              WHEN st.[name] IN (N''int'', N''smalldatetime'', N''smallmoney'') THEN 4
              WHEN st.[name] IN (N''bigint'', N''money'', N''timestamp'', N''datetime'') THEN 8
-             WHEN st.[name]=N''datetime2'' AND c.scale BETWEEN 1 AND 2 THEN 6
+             WHEN st.[name]=N''datetime2'' AND c.scale BETWEEN 0 AND 2 THEN 6
              WHEN st.[name]=N''datetime2'' AND c.scale BETWEEN 3 AND 4 THEN 7
              WHEN st.[name]=N''datetime2'' AND c.scale BETWEEN 5 AND 7 THEN 8
              WHEN st.[name]=N''datetimeoffset'' AND c.scale BETWEEN 0 AND 2 THEN 8
