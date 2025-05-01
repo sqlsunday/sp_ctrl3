@@ -1227,7 +1227,7 @@ SELECT (CASE WHEN @is_tempdb=1 THEN '' ELSE sch.[name] END) AS [Schema],
             WHERE sub.[object_id]=@object_id AND sub.index_id IN (0, 1))
          ELSE ''
 	 END) AS [Row count],
-     (SELECT ISNULL(STR(NULLIF(SUM(1.0*ps.used_page_count)*8/1024, 0), 12, 2)+' MB', '')
+     (SELECT ISNULL(REPLACE(REPLACE(CONVERT(varchar(100), CAST(NULLIF(SUM(1.0*ps.used_page_count)*8/1024, 0) AS money), 1), ',', ' '), '.00', '')+' MB', '')
       FROM @syspartitionstats AS ps
       RIGHT JOIN @syspartitions AS p ON ps.[partition_id]=p.[partition_id]
       LEFT JOIN @sysindexes AS ix ON p.[object_id]=ix.[object_id] AND p.index_id=ix.index_id
