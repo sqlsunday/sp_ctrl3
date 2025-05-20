@@ -36,7 +36,7 @@ SHORTCUT:   In SQL Server Management Studio, go to Tools -> Options
             schema (with a dot) need to be enclosed in quotes for this
             to work in older versions of SSMS.
 
-VERSION:    2025-05-01
+VERSION:    2025-05-20
 
 */
 
@@ -72,6 +72,7 @@ DECLARE @object_id              int,
         @uses_ansi_nulls        bit,
 	    @uses_quoted_identifier bit,
         @temp                   nvarchar(max),
+        @temp2                  nvarchar(max),
         @default_fill_factor    tinyint=(SELECT TOP (1) CAST((CASE [value] WHEN 100 THEN 0 ELSE [value] END) AS tinyint)
                                          FROM sys.configurations
                                          WHERE [name] LIKE N'%fill factor%');
@@ -453,6 +454,9 @@ DECLARE @sysparameters TABLE (
 DECLARE @sysindexes TABLE (
     [object_id]          int NOT NULL,
     index_id             int NOT NULL,
+    physical_object_id   int NOT NULL,
+    physical_index_id    int NOT NULL,
+    is_primary_physical_index bit NOT NULL,
     [name]               sysname COLLATE database_default NULL,
     [type]               tinyint NOT NULL,
     [type_desc]          nvarchar(120) COLLATE database_default NULL,
@@ -469,7 +473,10 @@ DECLARE @sysindexes TABLE (
     is_system_named      bit NOT NULL,
     [bucket_count]       bigint NULL,
     [compression_delay]  int NULL,
-    PRIMARY KEY CLUSTERED ([object_id], index_id)
+    using_xml_index_id	 int NULL,
+    [secondary_type]     char(1) NULL,
+    xml_index_type       tinyint NULL,
+    PRIMARY KEY CLUSTERED ([object_id], index_id, physical_index_id)
 );
 
 DECLARE @sysindexcolumns TABLE (
@@ -818,26 +825,83 @@ WHERE p.[object_id]='+@object_id_str);
 
 SET @temp=(CASE WHEN SERVERPROPERTY('ProductVersion')>=N'13' THEN N'ix.[compression_delay]' ELSE N'NULL' END);
 
+--- Regular indexes
 INSERT INTO @sysindexes
 EXEC(N'
-SELECT ix.[object_id], ix.index_id, ix.[name], ix.[type], ix.[type_desc], ix.data_space_id,
+SELECT ix.[object_id], ix.index_id, ix.[object_id], ix.index_id, 1 AS is_primary_physical_index, ix.[name], ix.[type], ix.[type_desc], ix.data_space_id,
        ix.is_primary_key, ix.is_unique_constraint, ix.is_unique, ix.filter_definition,
        ix.fill_factor, ix.[allow_row_locks], ix.[allow_page_locks], ix.is_padded, ix.has_filter,
-	   ISNULL(kc.is_system_named, 0), NULL, '+@temp+N'
+	   ISNULL(kc.is_system_named, 0), NULL, '+@temp+N', NULL, NULL, NULL
 FROM '+@database+N'.sys.indexes AS ix
 LEFT JOIN '+@database+N'.sys.key_constraints AS kc ON ix.[object_id]=kc.parent_object_id AND ix.[name]=kc.[name]
-WHERE ix.is_hypothetical=0 AND ix.[type_desc] NOT LIKE N''%HASH%''');
+WHERE ix.is_hypothetical=0
+  AND ix.[type_desc] NOT LIKE N''%HASH%''
+  AND ix.[type] NOT IN (3, 4, 9)');
 
+--- Hash indexes
 IF (@compatibility_level>=120)
     INSERT INTO @sysindexes
     EXEC(N'
-    SELECT ix.[object_id], ix.index_id, ix.[name], ix.[type], ix.[type_desc], ix.data_space_id,
+    SELECT ix.[object_id], ix.index_id, ix.[object_id], ix.index_id, 1 AS is_primary_physical_index, ix.[name], ix.[type], ix.[type_desc], ix.data_space_id,
            ix.is_primary_key, ix.is_unique_constraint, ix.is_unique, ix.filter_definition,
            ix.fill_factor, ix.[allow_row_locks], ix.[allow_page_locks], ix.is_padded, ix.has_filter,
-	       ISNULL(kc.is_system_named, 0), ix.[bucket_count], NULL
+	       ISNULL(kc.is_system_named, 0), ix.[bucket_count], NULL, NULL, NULL, NULL
     FROM '+@database+N'.sys.hash_indexes AS ix
     LEFT JOIN '+@database+N'.sys.key_constraints AS kc ON ix.[object_id]=kc.parent_object_id AND ix.[name]=kc.[name]
     WHERE ix.is_hypothetical=0');
+
+SET @temp2= N'
+    VALUES (NULL)'
+
+IF (@compatibility_level>=170)
+    SET @temp2=N'
+    SELECT STRING_AGG(N''''''''+REPLACE(p.[path], N'''''''', N'''''''''''')+N'''''''', N'', '')
+    FROM sys.json_index_paths AS p
+    WHERE p.[object_id]=virtual_ix.[object_id]
+      AND p.index_id=virtual_ix.index_id';
+
+--- Spatial indexes, JSON indexes
+INSERT INTO @sysindexes
+EXEC(N'
+SELECT virtual_ix.[object_id], virtual_ix.index_id, ix.[object_id], ix.index_id, (CASE WHEN ix.index_id=1 THEN 1 ELSE 0 END) AS is_primary_physical_index, virtual_ix.[name], virtual_ix.[type], virtual_ix.[type_desc], ix.data_space_id,
+       0, 0, 0, f.[path] AS filter_definition,
+       ix.fill_factor, ix.[allow_row_locks], ix.[allow_page_locks], ix.is_padded, (CASE WHEN ISNULL(f.[path], N''$'')=''$'' THEN 0 ELSE 1 END) AS has_filter,
+       0, NULL, '+@temp+N', NULL, NULL, NULL
+FROM '+@database+N'.sys.indexes AS virtual_ix
+INNER JOIN '+@database+N'.sys.objects AS o ON o.[type]=''IT'' AND o.is_ms_shipped=1 AND o.parent_object_id=virtual_ix.[object_id]
+INNER JOIN '+@database+N'.sys.indexes AS ix ON o.[object_id]=ix.[object_id]
+OUTER APPLY ('+@temp2+N'
+    ) AS f([path])
+WHERE virtual_ix.is_hypothetical=0
+  AND virtual_ix.[type] IN (4, 9)
+  AND o.[name] LIKE N''%[_]''+CAST(virtual_ix.[object_id] AS nvarchar(128))+N''[_]''+CAST(virtual_ix.index_id AS nvarchar(128))');
+
+--- XML indexes
+---
+--- TODO:
+---
+--- * sys.selective_xml_index_namespaces
+--- * sys.selective_xml_index_paths
+--- * sys.xml_indexes
+
+INSERT INTO @sysindexes
+EXEC(N'
+SELECT virtual_ix.[object_id], virtual_ix.index_id, ix.[object_id], ix.index_id, 1 AS is_primary_physical_index, virtual_ix.[name], virtual_ix.[type], REPLACE(virtual_ix.xml_index_type_description, N''SECONDARY_'', N''''), ix.data_space_id,
+       0, 0, 0, NULL AS filter_definition,
+       ix.fill_factor, ix.[allow_row_locks], ix.[allow_page_locks], ix.is_padded, 0 AS has_filter,
+       0, NULL, '+@temp+N', virtual_ix.using_xml_index_id, virtual_ix.[secondary_type], virtual_ix.xml_index_type
+FROM '+@database+N'.sys.xml_indexes AS virtual_ix
+LEFT JOIN '+@database+N'.sys.xml_indexes AS prim_ix ON prim_ix.[object_id]=virtual_ix.[object_id] AND prim_ix.index_id=virtual_ix.using_xml_index_id
+INNER JOIN '+@database+N'.sys.objects AS o ON o.[type]=''IT'' AND o.is_ms_shipped=1 AND o.parent_object_id=virtual_ix.[object_id]
+INNER JOIN '+@database+N'.sys.indexes AS ix ON o.[object_id]=ix.[object_id] AND ix.[name]=virtual_ix.[name]
+WHERE virtual_ix.[type]=3
+  AND o.[name] LIKE N''%[_]''+CAST(virtual_ix.[object_id] AS nvarchar(128))+N''[_]''+CAST(ISNULL(virtual_ix.using_xml_index_id, virtual_ix.index_id) AS nvarchar(128))');
+
+--- TODO:
+---
+--- * sys.spatial_index_tessellations
+--- * sys.spatial_indexes
+--- * sys.spatial_reference_systems
 
 INSERT INTO @sysindexcolumns
 EXEC(N'
@@ -1362,16 +1426,18 @@ IF (@has_indexes=1)
 	WITH ixc AS (
 		SELECT ic.index_id, ic.is_included_column,
 		       ROW_NUMBER() OVER (
-			   PARTITION BY ic.index_id, ic.is_included_column
+			   PARTITION BY ic.index_id, ix.physical_index_id, ic.is_included_column
 			   ORDER BY ic.key_ordinal) AS ordinal,
 		       (CASE WHEN c.[name] LIKE N'[0-9]%' OR c.[name] LIKE N'%[^0-9a-z\_@]%' ESCAPE N'\' OR c.[name] IN (SELECT keyword FROM @reserved_keywords) THEN QUOTENAME(c.[name]) ELSE c.[name] END)+(CASE WHEN ic.is_descending_key=1 THEN N' DESC' ELSE N'' END) AS [name],
 		       (CASE WHEN c.[name] LIKE N'[0-9]%' OR c.[name] LIKE N'%[^0-9a-z\_@]%' ESCAPE N'\' OR c.[name] IN (SELECT keyword FROM @reserved_keywords) THEN QUOTENAME(c.[name]) ELSE c.[name] END) AS name_plain
-		FROM @sysindexcolumns AS ic
+		FROM @sysindexes AS ix
+        INNER JOIN @sysindexcolumns AS ic ON ix.[object_id]=ic.[object_id] AND ix.index_id=ic.index_id
 		INNER JOIN @syscolumns AS c ON ic.[object_id]=c.[object_id] AND ic.column_id=c.column_id
 		WHERE ic.[object_id]=@object_id
-          AND (key_ordinal>0 OR is_included_column=1)),
+          AND ix.is_primary_physical_index=1
+          AND (ic.key_ordinal>0 OR ic.is_included_column=1 OR ix.[type] IN (3, 4, 9))),
 
-	     rcte AS (
+	rcte AS (
 		SELECT index_id, is_included_column, ordinal,
                CAST([name] AS nvarchar(max)) AS list,
                CAST(name_plain AS nvarchar(max)) AS list_plain
@@ -1452,17 +1518,25 @@ IF (@has_indexes=1)
 
     SELECT (CASE WHEN ix.is_primary_key=0 AND ix.is_unique_constraint=0 AND ix.is_unique=1 THEN N'UNIQUE ' ELSE N'' END)+
            (CASE WHEN ix.is_primary_key=0 AND ix.is_unique_constraint=0 AND ix.[type]=1 THEN N'CLUSTERED ' ELSE N'' END)+
-           (CASE WHEN ix.[type]>=3 THEN REPLACE(ix.[type_desc], N'NONCLUSTERED ', N'')+' ' ELSE N'' END)+
+           (CASE WHEN ix.[type]>=3 THEN REPLACE(REPLACE(ix.[type_desc], N'_', N' '), N'NONCLUSTERED ', N'')+' ' ELSE N'' END)+
            (CASE WHEN 1 IN (ix.is_primary_key, ix.is_unique_constraint) THEN N'CONSTRAINT' ELSE N'INDEX' END) AS [Type],
            (CASE WHEN ix.is_system_named=0 THEN ix.[name] ELSE '' END) AS [Index/constraint name],
            (CASE WHEN ix.is_primary_key=1 THEN N'PRIMARY KEY '+ix.[type_desc]
     	     WHEN ix.is_unique_constraint=1 THEN N'UNIQUE CONSTRAINT '+ix.[type_desc]
     	     ELSE N'' END) AS [Constraint type],
-           ISNULL(N'('+(SELECT TOP 1 rcte.list FROM rcte WHERE rcte.index_id=ix.index_id AND (rcte.is_included_column=0 OR ix.[type]=6) ORDER BY rcte.ordinal DESC)+N')', N'') AS [Index columns],
+           ISNULL(N'('+(SELECT TOP 1 rcte.list FROM rcte WHERE rcte.index_id=ix.index_id AND (rcte.is_included_column=0 OR ix.[type] IN (3, 4, 9)) ORDER BY rcte.ordinal DESC)+N')', N'') AS [Index columns],
            ISNULL(N'INCLUDE ('+(SELECT TOP 1 rcte.list_plain FROM rcte WHERE rcte.index_id=ix.index_id AND rcte.is_included_column=1 AND ix.[type] IN (1, 2) ORDER BY rcte.ordinal DESC)+N')', N'') AS [Includes],
-           ISNULL(N' WHERE '+ix.filter_definition COLLATE database_default, N'') AS [Filter],
+           ISNULL((CASE WHEN ix.[type]=9 THEN N' FOR ('+ix.filter_definition COLLATE database_default+N')'
+                        ELSE N' WHERE '+ix.filter_definition COLLATE database_default
+                        END), N'') AS [Filter],
+       ISNULL(N'USING XML INDEX '+QUOTENAME(using_ix.[name])+N' ', N'')+
+       (CASE ix.[secondary_type]
+        WHEN 'P' THEN N'FOR PATH '
+        WHEN 'V' THEN N'FOR VALUE '
+        WHEN 'R' THEN N'FOR PROPERTY '
+        ELSE N'' END)+
 	   ISNULL(N'WITH ('+NULLIF(SUBSTRING(
-	              ISNULL(', DATA_COMPRESSION='+NULLIF(NULLIF(p.data_compression_desc, N'NONE'), N'COLUMNSTORE'), N'')+
+	              ISNULL(', DATA_COMPRESSION='+(CASE WHEN p.xml_compression_desc!='ON' THEN NULLIF(NULLIF(p.data_compression_desc, N'NONE'), N'COLUMNSTORE') END), N'')+
                   ISNULL(CAST((SELECT N', '+[definition] FROM part2 WHERE part2.[object_id]=ix.[object_id] AND part2.index_id=ix.index_id FOR XML PATH(N''), TYPE) AS varchar(max)), N'')+
                   ISNULL(', XML_COMPRESSION='+NULLIF(p.xml_compression_desc, N'OFF'), N'')+
                   ISNULL(CAST((SELECT N', '+[definition] FROM xpart2 WHERE xpart2.[object_id]=ix.[object_id] AND xpart2.index_id=ix.index_id FOR XML PATH(N''), TYPE) AS varchar(max)), N'')+
@@ -1481,11 +1555,14 @@ IF (@has_indexes=1)
             FROM @syspartitions AS sub
             WHERE sub.[object_id]=@object_id AND sub.index_id=ix.index_id AND ix.has_filter=1) AS [Filtered rows]
 	FROM @sysindexes AS ix
+    LEFT JOIN @sysindexes AS using_ix ON ix.[object_id]=using_ix.[object_id] AND ix.using_xml_index_id=using_ix.index_id
 	LEFT JOIN @sysdataspaces AS ds ON ix.data_space_id=ds.data_space_id
 	LEFT JOIN @sysindexcolumns AS pc ON ds.[type]='PS' AND ix.[object_id]=pc.[object_id] AND ix.index_id=pc.index_id AND pc.partition_ordinal>0
 	LEFT JOIN @syscolumns AS c ON pc.[object_id]=c.[object_id] AND pc.column_id=c.column_id
-	LEFT JOIN @syspartitions AS p ON ds.[type]!='PS' AND ix.[object_id]=p.[object_id] AND ix.index_id=p.index_id
-	WHERE ix.[object_id]=@object_id AND ix.index_id>0
+	LEFT JOIN @syspartitions AS p ON ds.[type]!='PS' AND ix.physical_object_id=p.[object_id] AND ix.physical_index_id=p.index_id
+	WHERE ix.[object_id]=@object_id
+      AND ix.index_id>0
+      AND ix.is_primary_physical_index=1
 	ORDER BY (CASE WHEN ix.is_primary_key=1 THEN 1
 		       WHEN ix.is_unique_constraint=1 THEN 2
 		       ELSE 3 END), ix.[type], ix.[name]
@@ -1883,13 +1960,6 @@ IF (@has_permissions=1)
 
 IF (@has_data=1 AND @rowcount>0)
 	SELECT ISNULL(ix.[name], N'') AS [Index/heap],
-/*
-	       --- Partition number, if there are partitions:
-	       (CASE COUNT(*) OVER (PARTITION BY p.[object_id], p.index_id)
-		     WHEN 1 THEN ''
-		     ELSE CAST(p.partition_number AS varchar(10))
-		     END) AS [Partition],
-*/
            (CASE WHEN p.discrete_boundary=0
                  THEN ISNULL(LAG(p.boundary, 1) OVER (PARTITION BY ix.index_id ORDER BY p.partition_number), N'')+
                  (CASE WHEN p.boundary_value_on_right=1 AND p.partition_number=1 THEN pc.[name]
@@ -1923,23 +1993,22 @@ IF (@has_data=1 AND @rowcount>0)
            ISNULL(STR(NULLIF(1.0*cs2.size_in_bytes/1024/1024, 0), 12, 2)+' MB', '') AS [CS closed],
            ISNULL(STR(NULLIF(1.0*cs3.size_in_bytes/1024/1024, 0), 12, 2)+' MB', '') AS [CS compressed]
 	FROM @syspartitionstats AS ps
-	RIGHT JOIN @syspartitions AS p ON ps.[partition_id]=p.[partition_id]
-    LEFT JOIN @index_physical_stats AS ips ON ips.[object_id]=@object_id AND ips.index_id=p.index_id AND ips.partition_number=p.partition_number
-	LEFT JOIN @sysindexes AS ix ON p.[object_id]=ix.[object_id] AND p.index_id=ix.index_id
+    RIGHT JOIN @syspartitions AS p ON ps.[partition_id]=p.[partition_id]
+    INNER JOIN @sysindexes AS ix ON p.[object_id]=ix.physical_object_id AND p.index_id=ix.physical_index_id
+    LEFT JOIN @index_physical_stats AS ips ON ips.[object_id]=ix.[object_id] AND ips.index_id=ix.index_id AND ips.partition_number=p.partition_number
 	--- Data space is either a file group or a partition function:
 	LEFT JOIN @sysdataspaces AS ds ON ix.data_space_id=ds.data_space_id
     LEFT JOIN @destination_data_spaces AS dds ON ds.data_space_id=dds.partition_scheme_id AND p.partition_number=dds.partition_number
     LEFT JOIN @sysdataspaces AS ds2 ON dds.data_space_id=ds2.data_space_id
 	--- This is the partitioning column:
-	LEFT JOIN @sysindexcolumns AS ixc ON ix.[object_id]=ixc.[object_id] AND
-	    ix.index_id=ixc.index_id AND ixc.partition_ordinal>0
-	LEFT JOIN @syscolumns AS pc ON pc.[object_id]=@object_id AND pc.column_id=ixc.column_id
+	LEFT JOIN @sysindexcolumns AS ixc ON ix.physical_object_id=ixc.[object_id] AND
+	    ix.physical_index_id=ixc.index_id AND ixc.partition_ordinal>0
+	LEFT JOIN @syscolumns AS pc ON pc.[object_id]=ix.physical_object_id AND pc.column_id=ixc.column_id
     LEFT JOIN @columnstore_rowgroups AS cs1 ON cs1.[object_id]=@object_id AND cs1.index_id=ix.index_id AND cs1.partition_number=p.partition_number AND cs1.[state]=1
     LEFT JOIN @columnstore_rowgroups AS cs2 ON cs2.[object_id]=@object_id AND cs2.index_id=ix.index_id AND cs2.partition_number=p.partition_number AND cs1.[state]=2
     LEFT JOIN @columnstore_rowgroups AS cs3 ON cs3.[object_id]=@object_id AND cs3.index_id=ix.index_id AND cs3.partition_number=p.partition_number AND cs1.[state]=3
-	WHERE p.[object_id]=@object_id
-	ORDER BY ix.index_id, p.partition_number;
-
+	WHERE ix.[object_id]=@object_id
+	ORDER BY ix.index_id, ix.physical_index_id, p.partition_number;
 
 
 
