@@ -1405,7 +1405,7 @@ IF (@has_cols_or_params=1) BEGIN;
     --- Add space potential space requirement for uniqifiers:
     SELECT N'', N'', N'', N'', N'', N'', N'', N'', N'', N'-- 4 bytes (uniquifier)'
     FROM @sysindexes
-    WHERE [object_id]=@object_id AND index_id IN (0, 1) AND is_unique=0
+    WHERE [object_id]=@object_id AND index_id=1 AND [type]=1 AND is_unique=0
 
     UNION ALL
 
