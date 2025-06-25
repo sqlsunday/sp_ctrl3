@@ -36,7 +36,7 @@ SHORTCUT:   In SQL Server Management Studio, go to Tools -> Options
             schema (with a dot) need to be enclosed in quotes for this
             to work in older versions of SSMS.
 
-VERSION:    2025-05-20
+VERSION:    2025-06-25
 
 */
 
@@ -476,6 +476,7 @@ DECLARE @sysindexes TABLE (
     using_xml_index_id	 int NULL,
     [secondary_type]     char(1) NULL,
     xml_index_type       tinyint NULL,
+    [optimize_for_sequential_key] bit NULL,
     PRIMARY KEY CLUSTERED ([object_id], index_id, physical_index_id)
 );
 
@@ -824,6 +825,7 @@ LEFT JOIN '+@database+N'.sys.schemas AS s ON t.is_table_type=1 AND t.[schema_id]
 WHERE p.[object_id]='+@object_id_str);
 
 SET @temp=(CASE WHEN SERVERPROPERTY('ProductVersion')>=N'13' THEN N'ix.[compression_delay]' ELSE N'NULL' END);
+SET @temp2=(CASE WHEN SERVERPROPERTY('ProductVersion')>=N'15' THEN N'[optimize_for_sequential_key]' ELSE N'NULL' END);
 
 --- Regular indexes
 INSERT INTO @sysindexes
@@ -831,7 +833,7 @@ EXEC(N'
 SELECT ix.[object_id], ix.index_id, ix.[object_id], ix.index_id, 1 AS is_primary_physical_index, ix.[name], ix.[type], ix.[type_desc], ix.data_space_id,
        ix.is_primary_key, ix.is_unique_constraint, ix.is_unique, ix.filter_definition,
        ix.fill_factor, ix.[allow_row_locks], ix.[allow_page_locks], ix.is_padded, ix.has_filter,
-	   ISNULL(kc.is_system_named, 0), NULL, '+@temp+N', NULL, NULL, NULL
+	   ISNULL(kc.is_system_named, 0), NULL, '+@temp+N', NULL, NULL, NULL, '+@temp2+N'
 FROM '+@database+N'.sys.indexes AS ix
 LEFT JOIN '+@database+N'.sys.key_constraints AS kc ON ix.[object_id]=kc.parent_object_id AND ix.[name]=kc.[name]
 WHERE ix.is_hypothetical=0
@@ -845,7 +847,7 @@ IF (@compatibility_level>=120)
     SELECT ix.[object_id], ix.index_id, ix.[object_id], ix.index_id, 1 AS is_primary_physical_index, ix.[name], ix.[type], ix.[type_desc], ix.data_space_id,
            ix.is_primary_key, ix.is_unique_constraint, ix.is_unique, ix.filter_definition,
            ix.fill_factor, ix.[allow_row_locks], ix.[allow_page_locks], ix.is_padded, ix.has_filter,
-	       ISNULL(kc.is_system_named, 0), ix.[bucket_count], NULL, NULL, NULL, NULL
+	       ISNULL(kc.is_system_named, 0), ix.[bucket_count], NULL, NULL, NULL, NULL, NULL
     FROM '+@database+N'.sys.hash_indexes AS ix
     LEFT JOIN '+@database+N'.sys.key_constraints AS kc ON ix.[object_id]=kc.parent_object_id AND ix.[name]=kc.[name]
     WHERE ix.is_hypothetical=0');
@@ -866,7 +868,7 @@ EXEC(N'
 SELECT virtual_ix.[object_id], virtual_ix.index_id, ix.[object_id], ix.index_id, (CASE WHEN ix.index_id=1 THEN 1 ELSE 0 END) AS is_primary_physical_index, virtual_ix.[name], virtual_ix.[type], virtual_ix.[type_desc], ix.data_space_id,
        0, 0, 0, f.[path] AS filter_definition,
        ix.fill_factor, ix.[allow_row_locks], ix.[allow_page_locks], ix.is_padded, (CASE WHEN ISNULL(f.[path], N''$'')=''$'' THEN 0 ELSE 1 END) AS has_filter,
-       0, NULL, '+@temp+N', NULL, NULL, NULL
+       0, NULL, '+@temp+N', NULL, NULL, NULL, NULL
 FROM '+@database+N'.sys.indexes AS virtual_ix
 INNER JOIN '+@database+N'.sys.objects AS o ON o.[type]=''IT'' AND o.is_ms_shipped=1 AND o.parent_object_id=virtual_ix.[object_id]
 INNER JOIN '+@database+N'.sys.indexes AS ix ON o.[object_id]=ix.[object_id]
@@ -889,7 +891,7 @@ EXEC(N'
 SELECT virtual_ix.[object_id], virtual_ix.index_id, ix.[object_id], ix.index_id, 1 AS is_primary_physical_index, virtual_ix.[name], virtual_ix.[type], REPLACE(virtual_ix.xml_index_type_description, N''SECONDARY_'', N''''), ix.data_space_id,
        0, 0, 0, NULL AS filter_definition,
        ix.fill_factor, ix.[allow_row_locks], ix.[allow_page_locks], ix.is_padded, 0 AS has_filter,
-       0, NULL, '+@temp+N', virtual_ix.using_xml_index_id, virtual_ix.[secondary_type], virtual_ix.xml_index_type
+       0, NULL, '+@temp+N', virtual_ix.using_xml_index_id, virtual_ix.[secondary_type], virtual_ix.xml_index_type, NULL
 FROM '+@database+N'.sys.xml_indexes AS virtual_ix
 LEFT JOIN '+@database+N'.sys.xml_indexes AS prim_ix ON prim_ix.[object_id]=virtual_ix.[object_id] AND prim_ix.index_id=virtual_ix.using_xml_index_id
 INNER JOIN '+@database+N'.sys.objects AS o ON o.[type]=''IT'' AND o.is_ms_shipped=1 AND o.parent_object_id=virtual_ix.[object_id]
@@ -1547,7 +1549,8 @@ IF (@has_indexes=1)
 	                   N', ALLOW_PAGE_LOCKS='+(CASE ix.[allow_page_locks] WHEN 1 THEN N'ON' ELSE N'OFF' END)+
 	                   (CASE WHEN ix.fill_factor!=0 THEN N', PAD_INDEX='+(CASE ix.is_padded WHEN 1 THEN N'ON' ELSE N'OFF' END) ELSE N'' END)
                   ELSE N'' END)+
-                  ISNULL(N', BUCKET_COUNT='+CAST(ix.[bucket_count] AS varchar(20)), N'')
+                  ISNULL(N', BUCKET_COUNT='+CAST(ix.[bucket_count] AS varchar(20)), N'')+
+                  (CASE WHEN ix.[optimize_for_sequential_key]=1 THEN N', OPTIMIZE_FOR_SEQUENTIAL_KEY=ON' ELSE N'' END)
             , 3, 10000), N'')+N')', N'') AS [Options],
 	   (CASE WHEN ix.index_id IS NOT NULL AND ds.is_default=0 THEN N'ON '+QUOTENAME(ds.[name])+ISNULL(N'('+c.[name]+N')', '') ELSE N'' END) AS [Data space],
            (SELECT ISNULL(REPLACE(REPLACE(CONVERT(nvarchar(100), CAST(SUM(sub.[rows]) AS money), 1), N',', N' '), N'.00', N'')+
