@@ -36,7 +36,7 @@ SHORTCUT:   In SQL Server Management Studio, go to Tools -> Options
             schema (with a dot) need to be enclosed in quotes for this
             to work in older versions of SSMS.
 
-VERSION:    2025-06-25
+VERSION:    2025-11-28
 
 */
 
@@ -430,6 +430,8 @@ DECLARE @syscolumns TABLE (
     max_alloc_size    int NULL,
     generated_always_type_desc nvarchar(60) COLLATE database_default NULL,
     is_hidden         bit NULL,
+    vector_dimensions int NULL,
+    vector_base_type_desc nvarchar(10) NULL,
     PRIMARY KEY CLUSTERED ([object_id], column_id)
 );
 
@@ -448,6 +450,8 @@ DECLARE @sysparameters TABLE (
     is_table_type     bit NOT NULL,
     [type_name]       sysname COLLATE database_default NOT NULL,
     tbl_type_cols     varchar(max) COLLATE database_default NULL,
+    vector_dimensions int NULL,
+    vector_base_type_desc nvarchar(10) NULL,
     PRIMARY KEY CLUSTERED (parameter_id)
 );
 
@@ -728,9 +732,11 @@ SELECT [schema_id], principal_id, name
 FROM '+@database+N'.sys.schemas');
 
 SET @temp=(CASE
+       WHEN @compatibility_level>=170
+       THEN N'c.generated_always_type_desc, c.is_hidden, c.vector_dimensions, c.vector_base_type_desc'
        WHEN @compatibility_level>=130
-       THEN N'c.generated_always_type_desc, c.is_hidden'
-       ELSE N'NULL, NULL' END);
+       THEN N'c.generated_always_type_desc, c.is_hidden, NULL, NULL'
+       ELSE N'NULL, NULL, NULL, NULL' END);
 
 INSERT INTO @syscolumns
 EXEC(N'
@@ -806,26 +812,31 @@ BEGIN CATCH;
     PRINT 'sys.sequences could not be loaded.';
 END CATCH;
 
-SET @temp=(CASE WHEN SERVERPROPERTY('ProductVersion')>=N'12' THEN N'p.is_nullable' ELSE N'1' END);
-
-INSERT INTO @sysparameters
-EXEC(N'
+SET @temp=N'
 SELECT p.parameter_id, p.[name], p.user_type_id, p.system_type_id, p.max_length, p.[precision],
-       p.scale, '+@temp+N', p.xml_collection_id, p.is_output, p.is_readonly, t.is_table_type,
+       p.scale, '+(CASE WHEN @compatibility_level>=120 THEN N'p.is_nullable' ELSE N'1' END)+N',
+       p.xml_collection_id, p.is_output, p.is_readonly, t.is_table_type,
        ISNULL(s.[name]+N''.'', N'''')+t.[name] AS [type_name],
 	   N''(''+SUBSTRING(CAST((SELECT N'', ''+ttc.[name]
 	                          FROM '+@database+N'.sys.all_columns AS ttc
 	                          WHERE ttc.[object_id]=tt.type_table_object_id
 	                          ORDER BY ttc.column_id
-	                          FOR XML PATH(N''''), TYPE) AS varchar(max)), 3, 8000)+N'')'' AS tbl_type_cols
+	                          FOR XML PATH(N''''), TYPE) AS varchar(max)), 3, 8000)+N'')'' AS tbl_type_cols,
+       '+(CASE WHEN @compatibility_level>=170 THEN N'p.vector_dimensions, p.vector_base_type_desc'
+               ELSE N'NULL, NULL' END)+N'
 FROM '+@database+N'.sys.all_parameters AS p
 LEFT JOIN '+@database+N'.sys.types AS t ON p.user_type_id=t.user_type_id
 LEFT JOIN '+@database+N'.sys.table_types AS tt ON t.user_type_id=tt.user_type_id
 LEFT JOIN '+@database+N'.sys.schemas AS s ON t.is_table_type=1 AND t.[schema_id]=s.[schema_id]
-WHERE p.[object_id]='+@object_id_str);
+WHERE p.[object_id]='+@object_id_str;
+
+INSERT INTO @sysparameters
+EXEC(@temp);
 
 SET @temp=(CASE WHEN SERVERPROPERTY('ProductVersion')>=N'13' THEN N'ix.[compression_delay]' ELSE N'NULL' END);
 SET @temp2=(CASE WHEN SERVERPROPERTY('ProductVersion')>=N'15' THEN N'[optimize_for_sequential_key]' ELSE N'NULL' END);
+SET @temp=(CASE WHEN @compatibility_level>=130 THEN N'ix.[compression_delay]' ELSE N'NULL' END);
+SET @temp2=(CASE WHEN @compatibility_level>=150 THEN N'[optimize_for_sequential_key]' ELSE N'NULL' END);
 
 --- Regular indexes
 INSERT INTO @sysindexes
@@ -1334,6 +1345,7 @@ IF (@has_cols_or_params=1) BEGIN;
 	       (CASE WHEN obj.[type]='SO' THEN N'AS ' ELSE N'' END)+
 	       (CASE WHEN col.is_persisted IS NULL THEN
                col.[type_name]+(CASE
+                   WHEN col.[type_name]=N'vector' THEN N'('+CAST(col.vector_dimensions AS nvarchar(10))+ISNULL(N', '+NULLIF(col.vector_base_type_desc, N'float32'), N'')+N')'
 			       WHEN col.user_type_id!=col.system_type_id THEN ''
 			       WHEN col.[type_name] LIKE N'n%char%' THEN N'('+ISNULL(CAST(NULLIF(col.max_length, -1)/2 AS varchar(max)), N'max')+N')'
 			       WHEN col.[type_name] LIKE N'%char%' OR col.[type_name] LIKE N'%binary%' THEN N'('+ISNULL(CAST(NULLIF(col.max_length, -1)   AS varchar(max)), N'max')+N')'
@@ -1378,7 +1390,8 @@ IF (@has_cols_or_params=1) BEGIN;
                  CAST(NULL AS bit) AS is_readonly, CAST(NULL AS bit) AS is_table_type,
 		         seed_value, increment_value, [definition], is_persisted, [type_name],
 		         default_name, default_is_system_named, CAST(NULL AS varchar(max)) AS tbl_type_cols,
-                 current_value, max_alloc_size, generated_always_type_desc, is_hidden
+                 current_value, max_alloc_size, generated_always_type_desc, is_hidden,
+                 vector_dimensions, vector_base_type_desc
 	      FROM @syscolumns
 	      WHERE [object_id]=@object_id
           UNION ALL
@@ -1386,7 +1399,8 @@ IF (@has_cols_or_params=1) BEGIN;
 		         max_length, [precision], scale, NULL, is_nullable, NULL,
 		         NULL, xml_collection_id, NULL, is_output, is_readonly,
                  is_table_type, NULL, NULL, NULL, NULL, [type_name], NULL, NULL, tbl_type_cols,
-                 NULL AS current_value, NULL AS max_alloc_size, NULL AS generated_always_type_desc, NULL AS is_hidden
+                 NULL AS current_value, NULL AS max_alloc_size, NULL AS generated_always_type_desc, NULL AS is_hidden,
+                 vector_dimensions, vector_base_type_desc
 	      FROM @sysparameters
 	      ) AS col
     OUTER APPLY (
